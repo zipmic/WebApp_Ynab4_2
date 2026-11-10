@@ -1,0 +1,57 @@
+{
+  "name": "budget-reborn",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Budget Reborn — a private, self-hosted successor to YNAB4",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/copy-ocr-assets.mjs && vite build && node scripts/build-server.mjs",
+    "start": "NODE_ENV=production node dist/server/index.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "test:perf": "tsx tests/perf/perf.ts",
+    "postinstall": "node scripts/copy-ocr-assets.mjs"
+  },
+  "dependencies": {
+    "@fastify/compress": "^9.3.0",
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/static": "^10.1.10",
+    "@node-rs/argon2": "^2.2.2",
+    "@simplewebauthn/server": "^14.1.0",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
+    "@tailwindcss/vite": "^4.3.5",
+    "@tanstack/react-query": "^5.107.1",
+    "@tanstack/react-virtual": "^3.14.26",
+    "@tesseract.js-data/dan": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "clsx": "^2.1.1",
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3",
+    "lucide-react": "^1.71.0",
+    "qrcode-generator": "^2.0.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "tesseract.js": "^7.0.0",
+    "tesseract.js-core": "^7.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7",
+    "vitest": "^5.1.0"
+  }
+}

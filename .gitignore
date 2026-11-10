@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+public/ocr/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+test-results/
+tests/e2e/screenshots/
