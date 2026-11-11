@@ -27,6 +27,19 @@ BR_DATA_DIR=/var/lib/budget-reborn BR_TRUST_PROXY=1 BR_REQUIRE_HTTPS=1 BR_PUBLIC
 ```
 All settings: `.env.example`. First start prints a setup token (also in `<data>/setup-token.txt`); the first visit creates the single owner account.
 
+## Backups off the machine
+Automatic backups (daily on use, before imports/restores) stay in `<data>/backups`. For a copy elsewhere, schedule:
+```bash
+# production install (after npm run build) — safe while the server runs
+BR_DATA_DIR=/var/lib/budget-reborn node dist/server/backup-now.mjs --copy-to /mnt/offsite/budget-reborn
+# development checkout
+BR_DATA_DIR=./data npm run backup -- --copy-to /mnt/offsite/budget-reborn
+```
+Example cron line (daily 03:17): `17 3 * * * cd /opt/budget-reborn && BR_DATA_DIR=/var/lib/budget-reborn node dist/server/backup-now.mjs --copy-to /mnt/offsite/budget-reborn`.
+The newest `BR_BACKUP_KEEP` scheduled backups per budget are kept in the data folder; copies in `--copy-to` are never
+deleted by the app. Each copy is a complete budget that *Restore backup* accepts. The copies contain all financial
+data unencrypted: the target must be private (encrypted disk or encrypted sync).
+
 ## Authentication and session model
 - **Single owner, no registration.** `POST /api/auth/setup` works only while no user exists. Without the setup token it works only for a request that comes from loopback, is addressed to `localhost`/`127.0.0.1`, carries no proxy headers, and only when neither `BR_TRUST_PROXY` nor `BR_REQUIRE_HTTPS` is set. Everywhere else the token is required.
 - Passwords: Argon2id (19 MiB, t=3), minimum 10 characters, uniform timing for unknown users.
@@ -56,4 +69,3 @@ traversal), `tests/e2e/run.mjs` (login, wrong password, passkey registration and
 - No database encryption at rest; rely on disk encryption of the host. No PIN lock in the UI.
 - 512 MB JSON bodies are buffered in memory (authenticated owner only).
 - External vision provider: tested only against a mock; leave unconfigured unless wanted.
-- Backups stay on the same machine unless the owner downloads them; add an off-site copy routine.

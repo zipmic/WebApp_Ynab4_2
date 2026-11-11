@@ -21,6 +21,7 @@ npm run typecheck
 npm run build && npm run test:e2e   # browser test against the production build
 npm run test:perf      # 51k-transaction benchmark with time limits
 npm run audit:ynab4 -- <.ynab4 folder | zip | Budget.yfull>   # migration audit, prints ids/counts only
+npm run backup -- --copy-to <folder>                       # back up every budget now (cron-safe)
 npm start              # production (after build); see docs/SECURITY_AND_DEPLOYMENT.md
 ```
 

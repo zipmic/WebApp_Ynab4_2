@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs'; import { tmpdir } from 'node:os'; import { join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process'; import { tmpdir } from 'node:os'; import { join } from 'node:path';
 import type { App } from '../../src/server/app.ts';
 import { BudgetService } from '../../src/server/budgetService.ts';
 import { BUDGET_MIGRATIONS, BUDGET_SCHEMA_VERSION, openBudgetDb } from '../../src/server/db.ts';
@@ -270,5 +271,38 @@ describe('restore from the JSON export (I3)', () => {
     { const d = clone(); d.tables.transactions[3].memo = { evil: true }; await bad(d, 422, 'BACKUP_CORRUPT'); }
     expect((await restore('{not json')).statusCode).toBe(415);
     expect(readdirSync(join(app.core.cfg.dataDir, 'budgets')).filter(f => f.endsWith('.sqlite')).length).toBe(n);
+  });
+});
+
+describe('scheduled backups (D2)', () => {
+  it('backs up every budget while the server is running, copies off-site, touches nothing the server owns', async () => {
+    const { app, dir } = await testApp(); const h = await login(app);
+    const ids: string[] = [];
+    for (const name of ['Første', 'Second']) { const id = (await app.inject({ method: 'POST', url: '/api/budgets', payload: { name }, headers: h })).json().id; ids.push(id); generateBudget(app.core.service(id), { startMonth: '2025-01', months: 3, txPerMonth: 10, seed: ids.length }); }
+    const upload = join(dir, 'tmp', 'upload-in-progress.sqlite'); writeFileSync(upload, 'partial');
+    const opened = JSON.stringify(app.core.listBudgets());
+    const offsite = mkdtempSync(join(tmpdir(), 'br-offsite-'));
+    const run = spawnSync('npx', ['tsx', 'scripts/backup-now.ts', '--copy-to', offsite], { env: { ...process.env, BR_DATA_DIR: dir }, encoding: 'utf8' });
+    expect(run.status).toBe(0); expect(run.stdout).toMatch(/2 of 2 budget\(s\) backed up/);
+    expect(existsSync(upload)).toBe(true); expect(JSON.stringify(app.core.listBudgets())).toBe(opened); // tmp untouched, "last opened" unchanged
+    for (const id of ids) expect(app.core.listBackups(id).filter(b => b.reason === 'scheduled')).toHaveLength(1);
+    const copies = readdirSync(offsite); expect(copies).toHaveLength(2); expect(copies.every(f => f.endsWith('.budgetreborn'))).toBe(true);
+    const restored = app.core.restore(readFileSync(join(offsite, copies.find(f => f.startsWith('Second'))!)));
+    expect(dump(app.core.service(restored.id))).toBe(dump(app.core.service(ids[1])));
+    expect(spawnSync('npx', ['tsx', 'scripts/backup-now.ts', '--copy-to'], { env: { ...process.env, BR_DATA_DIR: dir } }).status).toBe(2);
+    await app.close();
+  });
+  it('keeps the newest N scheduled and N daily backups; manual and safety backups are never pruned', async () => {
+    const { app, dir } = await testApp({ BR_BACKUP_KEEP: '2' }); const h = await login(app);
+    const id = (await app.inject({ method: 'POST', url: '/api/budgets', payload: { name: 'B' }, headers: h })).json().id;
+    const folder = join(dir, 'backups', id); mkdirSync(folder, { recursive: true });
+    for (const n of ['20200101T000000Z-scheduled', '20200102T000000Z-scheduled', '20200103T000000Z-scheduled', '20200101T000000Z-auto', '20200102T000000Z-auto', '20200103T000000Z-auto', '20200101T000000Z-manual', '20200101T000000Z-before-import'])
+      copyFileSync(join(dir, 'budgets', id + '.sqlite'), join(folder, n + '.sqlite'));
+    app.core.backup(id, 'scheduled');
+    const left = app.core.listBackups(id).map(b => b.reason + ' ' + b.at.slice(0, 10)).sort();
+    expect(left.filter(x => x.startsWith('scheduled'))).toHaveLength(2); expect(left).toContain('scheduled 2020-01-03'); // newest two of four
+    expect(left.filter(x => x.startsWith('auto'))).toEqual(['auto 2020-01-02', 'auto 2020-01-03']);
+    expect(left).toContain('manual 2020-01-01'); expect(left).toContain('before-import 2020-01-01');
+    await app.close();
   });
 });

@@ -17,10 +17,14 @@ export class Core {
   readonly sys: DB; readonly auth: Auth;
   private services = new Map<string, BudgetService>();
   private budgetsDir: string; private backupsDir: string; private tmpDir: string;
-  constructor(public readonly cfg: Config) {
+  /**
+   * `maintenance`: for command-line tools that run next to a live server (e.g. scripts/backup-now.ts). Nothing the
+   * server owns is touched: the upload temp folder is not emptied, "last opened" is not updated, no automatic backup.
+   */
+  constructor(public readonly cfg: Config, private readonly opts: { maintenance?: boolean } = {}) {
     this.budgetsDir = join(cfg.dataDir, 'budgets'); this.backupsDir = join(cfg.dataDir, 'backups'); this.tmpDir = join(cfg.dataDir, 'tmp');
     for (const d of [this.budgetsDir, this.backupsDir, this.tmpDir]) mkdirSync(d, { recursive: true, mode: 0o700 });
-    for (const f of readdirSync(this.tmpDir)) { try { unlinkSync(join(this.tmpDir, f)); } catch { /* ignore */ } }
+    if (!opts.maintenance) for (const f of readdirSync(this.tmpDir)) { try { unlinkSync(join(this.tmpDir, f)); } catch { /* ignore */ } }
     this.sys = openSystemDb(join(cfg.dataDir, 'system.sqlite'));
     this.auth = new Auth(this.sys, cfg);
   }
@@ -33,8 +37,7 @@ export class Core {
     if (!s) {
       if (!ID_RE.test(id) || !this.sys.prepare('SELECT 1 FROM budgets WHERE id=?').get(id) || !existsSync(this.file(id))) throw notFound('Budget');
       s = new BudgetService(openBudgetDb(this.file(id)), id); this.services.set(id, s);
-      this.sys.prepare('UPDATE budgets SET last_opened=? WHERE id=?').run(nowIso(), id);
-      this.autoBackup(id);
+      if (!this.opts.maintenance) { this.sys.prepare('UPDATE budgets SET last_opened=? WHERE id=?').run(nowIso(), id); this.autoBackup(id); }
     }
     return s;
   }
@@ -71,8 +74,9 @@ export class Core {
     if (existsSync(target)) return name;
     svc.db.prepare('VACUUM INTO ?').run(target);
     // retention: keep the newest N automatic backups; manual and safety backups are kept
-    const autos = this.listBackups(id).filter(b => b.reason === 'auto');
-    for (const b of autos.slice(this.cfg.backupKeep)) { try { unlinkSync(join(this.backupDir(id), b.name)); } catch { /* ignore */ } }
+    // retention: the newest N of each automatic kind ('auto' = daily on use, 'scheduled' = scripts/backup-now.ts)
+    const all = this.listBackups(id); const autos = [...all.filter(b => b.reason === 'auto').slice(this.cfg.backupKeep), ...all.filter(b => b.reason === 'scheduled').slice(this.cfg.backupKeep)];
+    for (const b of autos) { try { unlinkSync(join(this.backupDir(id), b.name)); } catch { /* ignore */ } }
     return name;
   }
   listBackups(id: string) {

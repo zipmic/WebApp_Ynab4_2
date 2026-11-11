@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1 (tool part), M3, M4, I1 and I3. Test counts: 112 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1 (tool part), M3, M4, I1, I3 and D2. Test counts: 114 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -20,6 +20,7 @@ Last updated after backlog items M1 (tool part), M3, M4, I1 and I3. Test counts:
 | Atomic operations (failed step leaves nothing behind) | unit tests |
 | Schema upgrade v1→v2 with safety copy; failed upgrade leaves the database untouched; newer database refused | unit tests |
 | Backups, download, validated restore as a new budget, CSV/JSON export | unit + browser tests |
+| Scheduled/off-site backups: `scripts/backup-now.ts` (bundled as `dist/server/backup-now.mjs`), safe next to a running server, retention per kind (D2) | unit tests: live server untouched, copies restorable, retention keeps manual/safety backups |
 | Restore from the JSON export as a new budget (validated row by row, one transaction, consistency check; newer/foreign/damaged files refused) (I3) | unit/API tests: identical round trip, 8 rejection cases |
 | Authentication: setup, Argon2id, TOTP, sessions, CSRF, throttling, HTTPS/VPN options, 401 on all private routes | unit tests |
 | Passkeys | browser test with a virtual authenticator (not with a physical device) |
