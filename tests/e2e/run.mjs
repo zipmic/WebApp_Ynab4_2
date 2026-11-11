@@ -11,13 +11,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const { chromium, devices } = createRequire(import.meta.url)('playwright');
 
-const PORT = 8911, BASE = `http://127.0.0.1:${PORT}`, shots = 'tests/e2e/screenshots';
+const PORT = 8911, BASE = `http://localhost:${PORT}`, // "localhost" (not an IP) so that passkeys have a valid relying-party id
+  PROBE = `http://127.0.0.1:${PORT}`, shots = 'tests/e2e/screenshots';
 if (!existsSync('dist/server/index.mjs')) { console.error('Run "npm run build" first.'); process.exit(1); }
 mkdirSync(shots, { recursive: true });
 const dataDir = mkdtempSync(join(tmpdir(), 'br-e2e-'));
 const server = spawn('node', ['dist/server/index.mjs'], { env: { ...process.env, NODE_ENV: 'production', BR_DATA_DIR: dataDir, BR_PORT: String(PORT) }, stdio: 'pipe' });
 let serverLog = ''; server.stdout.on('data', d => { serverLog += d; }); server.stderr.on('data', d => { serverLog += d; });
-for (let i = 0; i < 50; i++) { try { if ((await fetch(BASE + '/api/auth/status')).ok) break; } catch { /* starting */ } await new Promise(r => setTimeout(r, 200)); }
+for (let i = 0; i < 50; i++) { try { if ((await fetch(PROBE + '/api/auth/status')).ok) break; } catch { /* starting */ } await new Promise(r => setTimeout(r, 200)); }
 
 let passed = 0; const failures = [];
 let bail = false;
@@ -26,7 +27,7 @@ const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, acceptDownloads: true, locale: 'da-DK' });
 ctx.setDefaultTimeout(12000); let page = await ctx.newPage(); const errors = [];
-page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error' && !/status of 4\d\d/.test(m.text())) errors.push(m.text()); // expected 4xx answers (wrong password, rejected file) are not app errors });
+page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error' && !/status of 4\d\d/.test(m.text())) errors.push(m.text()); });
 const shot = name => page.screenshot({ path: `${shots}/${name}.png` });
 const text = sel => page.locator(sel).innerText();
 const atb = async () => (await text('[data-testid=atb]')).split('\n')[0].trim();
@@ -166,6 +167,14 @@ await step('dark mode', async () => {
   expect(await page.evaluate(() => document.documentElement.classList.contains('dark')), 'dark class missing'); await shot('14-budget-dark');
   await page.evaluate(() => { location.hash = '#/accounts/all'; }); await page.waitForTimeout(500); await shot('15-register-dark');
   await page.evaluate(() => { localStorage.setItem('br-theme', 'light'); });
+});
+await step('passkey: register with a (virtual) authenticator, sign out, sign in with the passkey', async () => {
+  const cdp = await ctx.newCDPSession(page); await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+  await page.evaluate(() => { location.hash = '#/settings'; }); await page.getByRole('tab', { name: 'Security' }).click();
+  await page.getByRole('button', { name: 'Add a passkey' }).click(); await page.getByText('Passkey added').waitFor();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
+  await page.getByRole('tab', { name: 'Security' }).waitFor(); expect((await page.request.get(BASE + '/api/budgets')).status() === 200, 'not signed in after passkey login');
 });
 await step('sign out, wrong password is refused, sign in again', async () => {
   await page.evaluate(() => { location.hash = '#/settings'; }); await page.getByRole('tab', { name: 'Security' }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
