@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1 (tool part), M3 and M4. Test counts: 110 unit/integration tests, 18 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1 (tool part), M3, M4 and I1. Test counts: 110 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -16,7 +16,7 @@ Last updated after backlog items M1 (tool part), M3 and M4. Test counts: 110 uni
 | Independent audit shown in the import wizard (verify + done steps) and Settings → Migration report; a FAIL verdict prevents the "verified" label (M3) | unit tests + browser step with a synthetic native budget |
 | Comparison of an import with YNAB4's own Budget export (`--budget-csv`, M1) | 8 synthetic tests (faithful import passes; wrong cell, unknown category, unreadable row, missing row detected; hidden categories and both Outflows sign conventions); **not yet run on the owner's real export** |
 | Import safety: preview without writing, new budget only, rollback on failure, duplicate-import guard | unit/API tests; real zip through the API |
-| Concurrent-edit detection (revision, 409 STALE) | unit + API tests incl. simultaneous requests |
+| Concurrent-edit detection (revision, 409 STALE) and the client's reaction (message, refresh, retry; failed writes rolled back on screen) | unit + API tests incl. simultaneous requests; browser test with two devices (I1) |
 | Atomic operations (failed step leaves nothing behind) | unit tests |
 | Schema upgrade v1→v2 with safety copy; failed upgrade leaves the database untouched; newer database refused | unit tests |
 | Backups, download, validated restore as a new budget, CSV/JSON export | unit + browser tests |
@@ -39,7 +39,6 @@ Last updated after backlog items M1 (tool part), M3 and M4. Test counts: 110 uni
 | Deployment behind a real reverse proxy | configuration examples only; never deployed |
 | Service worker / installable PWA | registered in production builds; not tested on phones |
 | Report figures | not compared with YNAB4's reports |
-| Client handling of 409 STALE (refresh + message) | implemented; no browser test with two devices |
 
 ## Known bugs and rough edges
 1. Hidden categories are appended to the end of their group after import (original position inside the group is not stored by YNAB4 for hidden ones).

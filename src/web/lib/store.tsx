@@ -87,7 +87,8 @@ export function BudgetProvider({ bid, children, fallback }: { bid: string; child
     const accountById = new Map(boot.accounts.map(a => [a.id, a])), categoryById = new Map(boot.categories.map(c => [c.id, c])), groupById = new Map(boot.groups.map(g => [g.id, g])), payeeById = new Map(boot.payees.map(p => [p.id, p]));
     const categoryOptions: CategoryOption[] = [...INCOME_OPTIONS, ...boot.categories.map(c => ({ id: c.id, label: c.name, group: groupById.get(c.groupId)?.name ?? '', hidden: c.hidden || !!groupById.get(c.groupId)?.hidden }))];
     const applyChange = (c: TxnChange) => { patchTxCaches(qc, bid, c); refresh(); };
-    const mutate = async <T,>(fn: () => Promise<T>) => { try { const r = await fn(); refresh(); return r; } catch (e) { toastError(e); return undefined; } };
+    // a failed write also reloads, so optimistic updates on screen (e.g. a typed budget amount) are rolled back
+    const mutate = async <T,>(fn: () => Promise<T>) => { try { const r = await fn(); refresh(); return r; } catch (e) { toastError(e); refresh(); return undefined; } };
     const replay = (kind: 'undo' | 'redo') => async () => {
       try { const r = await post(`/b/${bid}/${kind}`); if (r.label) { toast(`${kind === 'undo' ? 'Undid' : 'Redid'}: ${r.label}`); qc.invalidateQueries({ queryKey: ['b', bid] }); } else toast(`Nothing to ${kind}`); } catch (e) { toastError(e); }
     };

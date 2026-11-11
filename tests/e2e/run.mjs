@@ -73,6 +73,34 @@ await step('budgeting: typing amounts (with arithmetic) updates Available to Bud
   expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')) === 'Budgeted for Transport', 'Enter did not move to the next category');
   await page.keyboard.type('800'); await page.keyboard.press('Enter'); await page.waitForTimeout(300); expect((await atb()) === '6.700,00', `ATB is ${await atb()}`);
 });
+await step('two devices: a stale edit is refused with a clear message, the newer data is shown, nothing is lost', async () => {
+  const other = await browser.newContext({ viewport: { width: 1280, height: 800 }, storageState: await ctx.storageState(), locale: 'da-DK' });
+  const p2 = await other.newPage(); p2.on('pageerror', e => errors.push('device 2: ' + e.message));
+  await p2.goto(BASE + '/#/budget'); await p2.locator('[data-testid=atb]').waitFor();
+  const cell = (p, name) => p.getByLabel(`Budgeted for ${name}`);
+  await cell(p2, 'Transport').fill('1000'); await cell(p2, 'Transport').press('Enter'); await p2.waitForTimeout(500);
+  expect((await atb()) === '6.700,00', 'device 1 should still show its old view');
+  // device 1 has not seen that change: its edit must be refused, not silently applied on top
+  await cell(page, 'Dagligvarer').fill('3000'); await cell(page, 'Dagligvarer').press('Enter');
+  await page.getByText(/changed from another device/).waitFor();
+  await page.waitForTimeout(600);
+  expect(await cell(page, 'Transport').inputValue() === '1.000,00', `device 1 not refreshed: ${await cell(page, 'Transport').inputValue()}`);
+  expect(await cell(page, 'Dagligvarer').inputValue() === '2.500,00', 'the refused edit is still shown');
+  expect((await atb()) === '6.500,00', `ATB after refresh: ${await atb()}`);
+  // after the refresh the same device can edit again
+  await cell(page, 'Transport').fill('800'); await cell(page, 'Transport').press('Enter'); await page.waitForTimeout(500);
+  expect((await atb()) === '6.700,00', `ATB after retry: ${await atb()}`);
+  await p2.reload(); await p2.locator('[data-testid=atb]').waitFor(); expect(await cell(p2, 'Transport').inputValue() === '800,00', 'device 2 does not see the retry');
+  // a write that fails for another reason (simulated server error) is rolled back on screen too
+  const before = errors.length;
+  await page.route('**/api/b/*/budget/*/categories/*', r => r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Simulated failure. No changes were saved.' } }) }));
+  await cell(page, 'Transport').fill('1234'); await cell(page, 'Transport').press('Enter'); await page.getByText('Simulated failure').waitFor(); await page.waitForTimeout(600);
+  await page.unroute('**/api/b/*/budget/*/categories/*');
+  for (let i = errors.length - 1; i >= before; i--) if (/status of 500/.test(errors[i])) errors.splice(i, 1); // the simulated failure only
+  expect(await cell(page, 'Transport').inputValue() === '800,00', `failed edit left on screen: ${await cell(page, 'Transport').inputValue()}`);
+  expect((await atb()) === '6.700,00', `ATB after failed edit: ${await atb()}`);
+  await other.close();
+});
 await step('register: add a transaction with payee/category autocomplete; budget activity follows', async () => {
   await page.getByRole('link', { name: /Lønkonto/ }).click(); await page.getByRole('button', { name: 'Add transaction' }).click();
   await page.getByLabel('Payee').fill('Netto'); await page.getByLabel('Category', { exact: true }).fill('Dagl'); await page.keyboard.press('Enter');
