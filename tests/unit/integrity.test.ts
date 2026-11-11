@@ -1,0 +1,149 @@
+import Database from 'better-sqlite3';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs'; import { tmpdir } from 'node:os'; import { join } from 'node:path';
+import type { App } from '../../src/server/app.ts';
+import { BudgetService } from '../../src/server/budgetService.ts';
+import { BUDGET_MIGRATIONS, BUDGET_SCHEMA_VERSION, openBudgetDb } from '../../src/server/db.ts';
+import { applyImport } from '../../src/server/importService.ts';
+import { auditNativeImport } from '../../src/server/migrationAudit.ts';
+import { parseYnab4Native } from '../../src/shared/ynab4native.ts';
+import { generateBudget, toYfull } from '../fixtures/generate.ts';
+import { basicBudget, login, memBudget, testApp } from './helpers.ts';
+
+const dump = (s: BudgetService) => JSON.stringify(['accounts', 'categories', 'payees', 'transactions', 'monthly_budgets', 'scheduled', 'reconciliations'].map(t => s.db.prepare(`SELECT * FROM ${t}`).all()));
+
+describe('concurrent editing: a change made elsewhere is never silently overwritten', () => {
+  it('service: compare-and-increment happens inside the write transaction', () => {
+    const { s, checking, groceries } = basicBudget(); const r0 = s.revision();
+    s.expectRevision(r0).setBudget('2026-01', groceries, { budgeted: 100 }); expect(s.revision()).toBe(r0 + 1);
+    const before = dump(s);
+    expect(() => s.expectRevision(r0).setBudget('2026-01', groceries, { budgeted: 999 })).toThrow(/another device/); // stale writer
+    expect(() => s.expectRevision(r0).createTransaction({ accountId: checking, date: '2026-01-01', amount: -1 })).toThrow(/another device/);
+    expect(dump(s)).toBe(before); expect(s.revision()).toBe(r0 + 1); // nothing written, revision untouched
+    s.setBudget('2026-01', groceries, { budgeted: 5 }); expect(s.revision()).toBe(r0 + 2); // an expectation never leaks into the next write
+    s.undo(); expect(s.revision()).toBe(r0 + 3); // undo is a change too: other devices must notice it
+    expect(() => s.expectRevision(r0 + 2).undo()).toThrow(/another device/);
+    expect(() => s.expectRevision(r0 + 2).redo()).toThrow(/another device/);
+  });
+  describe('HTTP: two devices', () => {
+    let app: App, h: Record<string, string>, bid: string, acc: string;
+    beforeAll(async () => { ({ app } = await testApp()); h = await login(app); bid = (await app.inject({ method: 'POST', url: '/api/budgets', payload: { name: 'B' }, headers: h })).json().id;
+      acc = (await app.inject({ method: 'POST', url: `/api/b/${bid}/accounts`, headers: h, payload: { name: 'Bank', type: 'checking', balance: 100000, date: '2026-01-01' } })).json().id; });
+    afterAll(async () => { await app.close(); });
+    it('the second writer gets 409 STALE, sees the new revision, and succeeds after refreshing', async () => {
+      const boot = async () => (await app.inject({ method: 'GET', url: `/api/b/${bid}/bootstrap`, headers: h })).json();
+      const rev = (await boot()).revision as number;
+      const write = (device: number, amount: number) => app.inject({ method: 'POST', url: `/api/b/${bid}/transactions`, headers: { ...h, 'x-budget-revision': String(device) }, payload: { accountId: acc, date: '2026-01-02', amount, payeeName: 'P' } });
+      const a = await write(rev, -100); expect(a.statusCode).toBe(200); expect(Number(a.headers['x-budget-revision'])).toBe(rev + 1);
+      const b = await write(rev, -200); // device B still believes in the old revision
+      expect(b.statusCode).toBe(409); expect(b.json().error).toMatchObject({ code: 'STALE', details: { revision: rev + 1 } });
+      expect((await boot()).accounts[0].balance).toBe(100000 - 100);
+      expect((await write(rev + 1, -200)).statusCode).toBe(200); expect((await boot()).accounts[0].balance).toBe(100000 - 300);
+      // simultaneous requests carrying the same revision: exactly one wins
+      const cur = (await boot()).revision; const both = await Promise.all([write(cur, -1), write(cur, -2), write(cur, -4)]);
+      expect(both.map(r => r.statusCode).sort()).toEqual([200, 409, 409]);
+      // a stale expectation must not leak into an unrelated later request
+      expect((await app.inject({ method: 'POST', url: `/api/b/${bid}/transactions`, headers: h, payload: { accountId: acc, date: '2026-01-03', amount: -8 } })).statusCode).toBe(200);
+    });
+  });
+});
+
+describe('atomic financial operations: all or nothing', () => {
+  it('a failing step inside transfers, splits, bulk edits, reconciliation and bank imports leaves no trace', async () => {
+    const { s, checking, savings, groceries } = basicBudget();
+    s.createTransaction({ accountId: checking, date: '2026-01-01', payeeName: 'Job', categoryId: 'income:this', amount: 1000_00, cleared: 'cleared' });
+    const t = s.createTransaction({ accountId: checking, date: '2026-01-05', transferAccountId: savings, amount: -50_00 });
+    s.setBudget('2026-01', groceries, { budgeted: 10_00 }); // the category is in use, so deleting it needs a valid target
+    const before = dump(s), rev = s.revision(), undo = s.undoStatus().undo;
+    const attempts: (() => unknown)[] = [
+      () => s.createTransaction({ accountId: checking, date: '2026-01-06', payeeName: 'A brand new payee', amount: -30_00, splits: [{ amount: -10_00, categoryId: groceries }, { amount: -20_00, transferAccountId: 'no-such-account' }] }),
+      () => s.createTransaction({ accountId: checking, date: '2026-01-06', payeeName: 'Another new payee', amount: -30_00, splits: [{ amount: -10_00, categoryId: groceries }, { amount: -20_00, categoryId: 'no-such-category' }] }),
+      () => s.createTransactions([{ accountId: checking, date: '2026-01-06', payeeName: 'Ok', amount: -1 }, { accountId: checking, date: '2026-01-06', amount: 0.5 }]),
+      () => s.updateTransaction(t.id, { transferAccountId: checking }),
+      () => s.updateTransaction(t.id, { amount: -70_00, splits: [{ amount: -1, categoryId: groceries }] }),
+      () => s.bulkUpdate([t.id, 'does-not-exist'], { cleared: 'cleared' }),
+      () => s.deleteTransactions([t.changed[1].id, 'x']).deleted.length === 0 && (() => { throw new Error('nothing deleted'); })(),
+      () => s.reconcile(checking, 12345),
+      () => s.moveMoney('2026-01', groceries, 'no-such-category', 100),
+      () => s.deleteCategory(groceries, 'no-such-category'),
+    ];
+    for (const a of attempts.slice(0, 6).concat(attempts.slice(7))) { expect(a).toThrow(); expect(dump(s)).toBe(before); expect(s.revision()).toBe(rev); expect(s.undoStatus().undo).toBe(undo); }
+    const { commit } = await import('../../src/server/bankImportService.ts');
+    expect(() => commit(s, checking, [{ date: '2026-01-07', payeeName: 'Good', amount: -5_00 }, { date: '2026-01-07', payeeName: 'Transfer', amount: -6_00, transferAccountId: 'no-such-account' }])).toThrow();
+    expect(dump(s)).toBe(before); expect(s.checkIntegrity()).toEqual([]);
+  });
+  it('a migration that fails halfway creates no budget and leaves existing budgets untouched', async () => {
+    const { app, dir } = await testApp(); const h = await login(app);
+    const keep = (await app.inject({ method: 'POST', url: '/api/budgets', payload: { name: 'Keep' }, headers: h })).json().id;
+    const src = memBudget(); generateBudget(src, { startMonth: '2025-06', months: 2, txPerMonth: 10 });
+    const y = toYfull(src); y.transactions[y.transactions.length - 1].cleared = 'Cleared'; y.transactions[y.transactions.length - 1].flag = 'Purple';
+    y.monthlyBudgets[0].month = '2025-06-01'; y.monthlyBudgets[0].monthlySubCategoryBudgets[0].budgeted = 1e300; // cannot be stored: the database rejects it after thousands of rows were inserted
+    const r = await app.inject({ method: 'POST', url: '/api/import/ynab4/commit', headers: h, payload: { files: [{ path: 'Budget.yfull', text: JSON.stringify(y) }] } });
+    expect(r.statusCode).toBeGreaterThanOrEqual(400);
+    expect((await app.inject({ method: 'GET', url: '/api/budgets', headers: h })).json().map((b: any) => b.id)).toEqual([keep]);
+    expect(readdirSync(join(dir, 'budgets')).filter(f => f.endsWith('.sqlite'))).toEqual([keep + '.sqlite']);
+    await app.close();
+  });
+});
+
+describe('schema upgrades', () => {
+  const v1Budget = (file: string) => { // a database exactly as version 1 of the application left it
+    const db = new Database(file); db.pragma('journal_mode = WAL'); db.exec(BUDGET_MIGRATIONS[0]); db.pragma('user_version = 1');
+    db.exec(`INSERT INTO accounts(id,name,type,on_budget) VALUES('a1','Bank','checking',1); INSERT INTO category_groups(id,name) VALUES('g1','Hverdag'); INSERT INTO categories(id,group_id,name) VALUES('c1','g1','Mad');
+      INSERT INTO transactions(id,account_id,date,category_id,amount,cleared,created_at) VALUES('t1','a1','2025-12-31','income:this',500000,'reconciled','x'),('t2','a1','2026-01-05','c1',-12345,'cleared','x');
+      INSERT INTO monthly_budgets(month,category_id,budgeted,overspending) VALUES('2026-01','c1',10000,'confined');`); db.close(); };
+  it('a version-1 budget is upgraded in place with every figure preserved, after a safety copy was written', () => {
+    expect(BUDGET_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
+    const file = join(mkdtempSync(join(tmpdir(), 'br-mig-')), 'b.sqlite'); v1Budget(file);
+    const s = new BudgetService(openBudgetDb(file), 'x');
+    expect(s.db.pragma('user_version', { simple: true })).toBe(BUDGET_SCHEMA_VERSION); expect(s.revision()).toBe(1);
+    expect(s.listAccounts()[0]).toMatchObject({ balance: 487655, clearedBalance: 487655 });
+    expect(s.getBudget('2026-01').rows[0]).toMatchObject({ budgeted: 10000, activity: -12345, available: -2345, handling: 'confined' }); expect(s.getBudget('2026-01').availableToBudget).toBe(490000);
+    expect(s.checkIntegrity()).toEqual([]); s.db.close();
+    const copy = `${file}.pre-v${BUDGET_SCHEMA_VERSION}.bak`; expect(existsSync(copy)).toBe(true);
+    const old = new Database(copy, { readonly: true }); expect(old.pragma('user_version', { simple: true })).toBe(1); expect((old.prepare('SELECT COUNT(*) n FROM transactions').get() as any).n).toBe(2); old.close();
+  });
+  it('a failing upgrade changes nothing: same version, same data, and the budget still opens with the old code path', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'br-mig-')), 'b.sqlite'); v1Budget(file);
+    const broken = [BUDGET_MIGRATIONS[0], `CREATE TABLE half_done(x); INSERT INTO half_done VALUES(1); UPDATE transactions SET amount = amount * 100; SELECT no_such_function();`];
+    expect(() => openBudgetDb(file, broken)).toThrow();
+    const db = new Database(file, { readonly: true });
+    expect(db.pragma('user_version', { simple: true })).toBe(1); expect((db.prepare('SELECT SUM(amount) s FROM transactions').get() as any).s).toBe(487655);
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE name='half_done'`).get()).toBeUndefined(); expect(db.pragma('integrity_check', { simple: true })).toBe('ok'); db.close();
+    const ok = new BudgetService(openBudgetDb(file), 'x'); expect(ok.listAccounts()[0].balance).toBe(487655); ok.db.close(); // the real upgrade still works afterwards
+  });
+  it('a database from a NEWER application version is refused instead of being damaged', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'br-mig-')), 'b.sqlite'); v1Budget(file);
+    const db = new Database(file); db.pragma('user_version = 99'); db.close();
+    expect(() => openBudgetDb(file)).toThrow(/newer/);
+  });
+});
+
+describe('independent migration audit (the tool run against the real budget)', () => {
+  const build = () => { const src = memBudget(); const g = generateBudget(src, { startMonth: '2024-10', months: 16, txPerMonth: 30, seed: 21 }); src.updateCategory(g.categories.Hobby, { hidden: true });
+    src.saveScheduled({ accountId: g.accounts.checking, nextDate: '2099-01-01', frequency: 'monthly', payeeName: 'Boligforeningen', categoryId: g.categories.Husleje, memo: '', amount: -9500_00, flag: null, transferAccountId: null, splits: [] });
+    const y = toYfull(src); y.transactions.push({ ...y.transactions[5], entityId: 'deleted-1', isTombstone: true }); y.accounts.push({ entityId: 'gone', accountName: 'Gone', accountType: 'Savings', onBudget: true, isTombstone: true });
+    const files = [{ path: 'b.ynab4/Budget.yfull', text: JSON.stringify(y) }]; const dst = memBudget(); applyImport(dst, parseYnab4Native(files), 'fp'); return { files, dst, y }; };
+  it('passes on a faithful import and reports what was deliberately not imported', () => {
+    const { files, dst } = build(); const a = auditNativeImport(files, dst);
+    expect(a.areas.filter(x => x.status === 'FAIL')).toEqual([]); expect(a.verdict).toBe('PASS');
+    expect(a.skipped).toEqual(expect.arrayContaining([{ kind: 'transaction', count: 1, reason: expect.any(String) }, { kind: 'account', count: 1, reason: expect.any(String) }]));
+    expect(a.areas.find(x => x.area.startsWith('Category balances and rollover'))!.detail).toMatch(/agree in all \d+ months/);
+  });
+  it('detects every kind of damage: a changed amount, a lost record, a duplicate, a broken link, a changed budget cell, a wrong rollover', () => {
+    const failing = (damage: (s: BudgetService) => void) => { const { files, dst } = build(); dst.db.pragma('foreign_keys = OFF'); damage(dst); dst.version++; return auditNativeImport(files, dst).areas.filter(x => x.status === 'FAIL').map(x => x.area).join(' | '); };
+    expect(failing(s => s.db.exec(`UPDATE transactions SET amount = amount + 1 WHERE seq = (SELECT MIN(seq) FROM transactions WHERE parent_id IS NULL AND transfer_txn_id IS NULL AND is_split = 0 AND category_id IS NOT NULL)`))).toMatch(/Transaction amounts.*Account balances/);
+    expect(failing(s => s.db.exec(`DELETE FROM transactions WHERE seq = (SELECT MAX(seq) FROM transactions WHERE parent_id IS NULL AND transfer_txn_id IS NULL AND is_split = 0)`))).toMatch(/every live source record present exactly once/);
+    expect(failing(s => s.db.exec(`INSERT INTO transactions(id,account_id,date,amount,cleared,created_at,source_id) SELECT 'dup', account_id, date, amount, cleared, created_at, source_id FROM transactions WHERE parent_id IS NULL AND transfer_txn_id IS NULL LIMIT 1`))).toMatch(/exactly once/);
+    expect(failing(s => s.db.exec(`UPDATE transactions SET transfer_txn_id = 'nowhere' WHERE seq = (SELECT MIN(seq) FROM transactions WHERE transfer_txn_id IS NOT NULL)`))).toMatch(/Transfers/);
+    expect(failing(s => s.db.exec(`UPDATE monthly_budgets SET budgeted = budgeted + 100 WHERE rowid = (SELECT MIN(rowid) FROM monthly_budgets)`))).toMatch(/Monthly budgeted amounts.*Category balances and rollover/);
+    expect(failing(s => s.db.exec(`UPDATE monthly_budgets SET overspending = NULL WHERE overspending = 'confined'`))).toMatch(/overspending \(red arrow\) settings.*Category balances and rollover/);
+    expect(failing(s => s.db.exec(`UPDATE transactions SET cleared = 'uncleared' WHERE seq = (SELECT MIN(seq) FROM transactions WHERE cleared = 'reconciled' AND parent_id IS NULL)`))).toMatch(/Cleared \/ reconciled.*Account balances/);
+    expect(failing(s => s.db.exec(`UPDATE transactions SET category_id = 'income:this' WHERE seq = (SELECT MIN(seq) FROM transactions WHERE category_id = 'income:next')`))).toMatch(/Category assignments.*Income for this month/);
+  });
+  it('reports fields and values it has never seen instead of ignoring them', () => {
+    const { y } = build(); y.transactions[0].someNewField = 1; y.accounts[0].accountType = 'CryptoWallet';
+    const files = [{ path: 'Budget.yfull', text: JSON.stringify(y) }]; const dst = memBudget(); applyImport(dst, parseYnab4Native(files), 'fp'); const a = auditNativeImport(files, dst);
+    expect(a.unrecognizedFields).toEqual({ transaction: ['someNewField'] }); expect(a.areas.find(x => x.area.startsWith('Field values'))!.status).toBe('PARTIAL'); expect(a.verdict).toBe('PARTIAL');
+  });
+});

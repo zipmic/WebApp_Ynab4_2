@@ -2,7 +2,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { formatMinor, parseAmountInput, type MoneyFormat } from '../../shared/money';
 import type { Account, BudgetSettings, Category, CategoryGroup, Payee, Txn, TxnChange } from '../../shared/types';
-import { ApiError, get, post } from './api';
+import { ApiError, get, getRevision, post, setRevision, setStaleHandler } from './api';
 
 // ------------------------------------------------------------------ hash router
 const subscribe = (cb: () => void) => { window.addEventListener('hashchange', cb); return () => window.removeEventListener('hashchange', cb); };
@@ -38,7 +38,7 @@ export const useIsMobile = () => useMedia('(max-width: 767px)');
 
 // ------------------------------------------------------------------ budget context
 export interface Bootstrap {
-  id: string; settings: BudgetSettings; accounts: Account[]; groups: CategoryGroup[]; categories: Category[]; payees: Payee[];
+  id: string; revision: number; settings: BudgetSettings; accounts: Account[]; groups: CategoryGroup[]; categories: Category[]; payees: Payee[];
   undo: { undo: string | null; redo: string | null }; range: { first: string; last: string }; scheduledPosted: number; today: string; lastImport: string | null;
 }
 export interface CategoryOption { id: string; label: string; group: string; hidden: boolean }
@@ -71,7 +71,14 @@ function patchTxCaches(qc: QueryClient, bid: string, c: TxnChange) {
 
 export function BudgetProvider({ bid, children, fallback }: { bid: string; children: ReactNode; fallback: (error: unknown) => ReactNode }) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['b', bid, 'bootstrap'], queryFn: () => get<Bootstrap>(`/b/${bid}/bootstrap`), staleTime: 15_000 });
+  const q = useQuery({ queryKey: ['b', bid, 'bootstrap'], queryFn: () => get<Bootstrap>(`/b/${bid}/bootstrap`), staleTime: 15_000, refetchOnWindowFocus: true });
+  // Another device or window changed the budget: everything on screen may be out of date, so reload it all.
+  useEffect(() => {
+    const rev = q.data?.revision; if (rev === undefined) return;
+    const known = getRevision(bid); setRevision(bid, rev);
+    if (known !== undefined && known !== rev) for (const k of ['tx', 'budget', 'aux']) qc.invalidateQueries({ queryKey: ['b', bid, k] });
+  }, [q.data?.revision, bid, qc]);
+  useEffect(() => { setStaleHandler(id => { qc.invalidateQueries({ queryKey: ['b', id] }); }); return () => setStaleHandler(() => {}); }, [qc]);
   const refresh = useCallback(() => { qc.invalidateQueries({ queryKey: ['b', bid, 'bootstrap'] }); qc.invalidateQueries({ queryKey: ['b', bid, 'budget'] }); qc.invalidateQueries({ queryKey: ['b', bid, 'aux'] }); }, [qc, bid]);
   const boot = q.data;
   const value = useMemo<Ctx | null>(() => {

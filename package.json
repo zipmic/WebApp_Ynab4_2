@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:e2e": "node tests/e2e/run.mjs",
     "test:perf": "tsx tests/perf/perf.ts",
-    "postinstall": "node scripts/copy-ocr-assets.mjs"
+    "postinstall": "node scripts/copy-ocr-assets.mjs",
+    "audit:ynab4": "tsx scripts/audit-ynab4.ts"
   },
   "dependencies": {
     "@fastify/compress": "^9.3.0",

@@ -179,8 +179,8 @@ await step('passkey: register with a (virtual) authenticator, sign out, sign in 
 await step('sign out, wrong password is refused, sign in again', async () => {
   await page.evaluate(() => { location.hash = '#/settings'; }); await page.getByRole('tab', { name: 'Security' }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.getByText('Sign in to your budget').waitFor(); const r = await page.request.get(BASE + '/api/budgets'); expect(r.status() === 401, 'API reachable after sign-out');
-  await page.getByLabel('Username').fill('owner'); await page.getByLabel('Password').fill('wrong-password-1'); await page.getByRole('button', { name: 'Sign in' }).click(); await page.getByText('Wrong username or password.').waitFor(); await shot('16-login');
-  await page.getByLabel('Password').fill('a-very-long-e2e-password'); await page.getByRole('button', { name: 'Sign in' }).click(); await page.getByRole('tab', { name: 'Security' }).waitFor(); await page.evaluate(() => { location.hash = '#/budget'; }); await page.locator('[data-testid=atb]').waitFor();
+  await page.getByLabel('Username').fill('owner'); await page.getByLabel('Password').fill('wrong-password-1'); await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await page.getByText('Wrong username or password.').waitFor(); await shot('16-login');
+  await page.getByLabel('Password').fill('a-very-long-e2e-password'); await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await page.getByRole('tab', { name: 'Security' }).waitFor(); await page.evaluate(() => { location.hash = '#/budget'; }); await page.locator('[data-testid=atb]').waitFor();
 });
 await step('phone layout: bottom navigation, account switching, budget sheet and fast transaction entry', async () => {
   const state = await ctx.storageState(); const m = await browser.newContext({ ...devices['iPhone 13'], storageState: state, locale: 'da-DK' }); page = await m.newPage(); page.on('pageerror', e => errors.push(e.message));

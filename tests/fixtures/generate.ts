@@ -77,14 +77,13 @@ export function toYfull(svc: BudgetService): any {
     fileMetaData: { entityType: 'fileMetaData', budgetDataVersion: '4.2', currentKnowledge: 'A-100' },
     accounts: accounts.map((a, i) => ({ entityType: 'account', entityId: a.id, accountName: a.name, accountType: typeMap[a.type] ?? 'Checking', onBudget: a.onBudget, hidden: a.closed, sortableIndex: i, note: a.note || null, entityVersion: 'A-1' })),
     masterCategories: [
-      { entityType: 'masterCategory', entityId: 'MasterCategory/__Internal__', name: 'Internal Master Category', type: 'OUTFLOW', sortableIndex: -100, subCategories: [
-        { entityType: 'category', entityId: 'Category/__ImmediateIncome__', name: 'Immediate Income', masterCategoryId: 'MasterCategory/__Internal__' },
-        { entityType: 'category', entityId: 'Category/__DeferredIncome__', name: 'Deferred Income', masterCategoryId: 'MasterCategory/__Internal__' },
-        { entityType: 'category', entityId: 'Category/__Split__', name: 'Split', masterCategoryId: 'MasterCategory/__Internal__' }] },
+      // as in real files: the built-in masters exist but are empty; income/split category ids appear only on transactions
+      { entityType: 'masterCategory', entityId: 'MasterCategory/__Internal__', name: '__Internal__', type: 'OUTFLOW', deleteable: false, sortableIndex: -100, subCategories: null },
+      { entityType: 'masterCategory', entityId: 'MasterCategory/__Income__', name: 'Income', type: 'INFLOW', deleteable: false, sortableIndex: -99, subCategories: null },
       ...groups.map((g, i) => ({ entityType: 'masterCategory', entityId: g.id, name: g.name, type: 'OUTFLOW', sortableIndex: i * 10, note: g.note || null, entityVersion: 'A-1',
         subCategories: cats.filter(c => c.groupId === g.id && !c.hidden).map((c, j) => ({ entityType: 'category', entityId: c.id, name: c.name, masterCategoryId: g.id, sortableIndex: j * 10, note: c.note || null, entityVersion: 'A-1' })) })),
       { entityType: 'masterCategory', entityId: 'MasterCategory/__Hidden__', name: 'Hidden Categories', type: 'OUTFLOW', sortableIndex: 99999,
-        subCategories: cats.filter(c => c.hidden).map((c, j) => ({ entityType: 'category', entityId: c.id, name: `${groups.find(g => g.id === c.groupId)!.name} \` ${c.name} \` ${j}`, masterCategoryId: 'MasterCategory/__Hidden__', sortableIndex: j })) },
+        subCategories: cats.filter(c => c.hidden).map((c, j) => ({ entityType: 'category', entityId: c.id, name: `${groups.find(g => g.id === c.groupId)!.name} \` ${c.name} \` ${c.groupId}`, masterCategoryId: 'MasterCategory/__Hidden__', sortableIndex: j })) },
     ],
     payees: [...payees.map(p => ({ entityType: 'payee', entityId: p.id, name: p.name, enabled: true, autoFillCategoryId: cat(p.autoCategoryId), entityVersion: 'A-1' })),
       ...accounts.map(a => ({ entityType: 'payee', entityId: `Payee/Transfer:${a.id}`, name: `Transfer : ${a.name}`, targetAccountId: a.id, enabled: true }))],

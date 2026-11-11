@@ -8,3 +8,16 @@ public/ocr/
 .env
 test-results/
 tests/e2e/screenshots/
+
+# Real financial data must never be committed
+*.ynab4
+*.ynab4.zip
+*.yfull
+*.ydiff
+*.ydevice
+*.ymeta
+*.budgetreborn
+*.bak
+audit-report*.json
+real-data/
+private/

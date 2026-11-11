@@ -148,7 +148,9 @@ describe('native YNAB4 (.ynab4 folder) migration', () => {
     expect(r.checks.filter(c => c.status === 'fail')).toEqual([]); expect(r.status).toBe('verified');
     compareBudgets(src, dst, g.firstMonth, '2026-12');
     expect(dst.listAccounts().map(a => [a.name, a.type, a.onBudget])).toEqual(src.listAccounts().map(a => [a.name, a.type, a.onBudget]));
-    expect(dst.listCategories().map(c => [c.name, c.hidden])).toEqual(src.listCategories().map(c => [c.name, c.hidden]).sort((a, b) => 0));
+    const catKey = (s: BudgetService) => s.listCategories().map(c => `${s.listGroups().find(g => g.id === c.groupId)!.name}/${c.name}/${c.hidden}`).sort();
+    expect(catKey(dst)).toEqual(catKey(src)); // the hidden category returns to its original group
+    expect(dst.listGroups().map(g => g.name)).toEqual(src.listGroups().map(g => g.name)); // no stray "Income"/"Hidden Categories" groups
     expect(dst.listScheduled().map(s => [s.nextDate, s.amount, s.payeeName, s.frequency])).toEqual([['2099-01-01', -9500_00, 'Boligforeningen', 'monthly']]);
     expect(dst.getBudget('2024-05').note).toBe('ferie i juli');
     expect(dst.getBudget('2024-05').rows.find(x => x.note)!.note).toBe('ny bil 2027');
@@ -202,6 +204,49 @@ describe('native YNAB4 (.ynab4 folder) migration', () => {
     expect(m.warnings.find(w => w.code === 'transfer_unlinked')!.count).toBe(1);
     const dst = memBudget(); applyImport(dst, m, 'fp');
     expect(dst.listAccounts().find(x => x.name === 'A')!.balance).toBe(-100_00); expect(dst.listTransactions()[0].payeeName).toBe('Transfer : B');
+  });
+  it('real-world folder layout: conflicted .ymeta copies, old data folders, AppleDouble junk and two device copies', () => {
+    const src = memBudget(); generateBudget(src, { startMonth: '2025-06', months: 2, txPerMonth: 10 });
+    const good = toYfull(src); const stale = { ...toYfull(src), transactions: [], fileMetaData: { currentKnowledge: 'A-1' } };
+    const D = 'My Budget~1A2B3C4D.ynab4/';
+    const files = [
+      { path: D + 'Budget (somebody\'s conflicted copy 2019-02-03).ymeta', text: JSON.stringify({ relativeDataFolderName: 'data1~OLD' }) },
+      { path: D + 'Budget.ymeta', text: JSON.stringify({ formatVersion: '2', relativeDataFolderName: 'data13-NEW' }) },
+      { path: D + 'data1~OLD/DEV-A/Budget.yfull', text: JSON.stringify({ ...stale, fileMetaData: { currentKnowledge: 'A-999999' } }) }, // old folder: must not win even with "more" knowledge
+      { path: D + 'data13-NEW/devices/A.ydevice', text: JSON.stringify({ deviceGUID: 'DEV-A', shortDeviceId: 'A', hasFullKnowledge: true, knowledge: 'A-100,B-7' }) },
+      { path: D + 'data13-NEW/DEV-A/Budget.yfull', text: JSON.stringify({ ...good, fileMetaData: { currentKnowledge: 'A-100,B-7' } }) },
+      { path: D + 'data13-NEW/DEV-B/Budget.yfull', text: JSON.stringify({ ...stale, fileMetaData: { currentKnowledge: 'A-90,B-7' } }) },
+      { path: '__MACOSX/' + D + 'data13-NEW/DEV-A/._Budget.yfull', text: '\u0000\u0005\u0016\u0007binary resource fork' },
+      { path: D + 'data13-NEW/DEV-A/._A-1_A-2.ydiff', text: '\u0000junk' }];
+    const m = parseYnab4Native(files);
+    expect(m.transactions.length).toBe(good.transactions.length); expect(m.budgetName).toBe('My Budget');
+    expect(m.warnings.map(w => w.code).sort()).toEqual(['multiple_devices', 'ymeta_conflicted_copies']);
+    // two device copies that each know something the other does not: reported, never silently merged
+    files[5] = { path: D + 'data13-NEW/DEV-B/Budget.yfull', text: JSON.stringify({ ...stale, fileMetaData: { currentKnowledge: 'A-90,B-9' } }) };
+    expect(parseYnab4Native(files).warnings.find(w => w.code === 'devices_diverged')!.level).toBe('warning');
+  });
+  it('sync diffs are applied in causal (knowledge) order, not by their publish-time text', () => {
+    const src = memBudget(); const a = src.createAccount({ name: 'A', type: 'checking' });
+    src.createTransaction({ accountId: a, date: '2025-01-01', payeeName: 'X', amount: -100 });
+    const y = toYfull(src); y.fileMetaData.currentKnowledge = 'A-10'; const t = y.transactions[0];
+    const diff = (start: string, end: string, publishTime: string, amount: number, version: string) => ({ path: `b.ynab4/data/DEV/${end}.ydiff`, text: JSON.stringify({ startVersion: start, endVersion: end, publishTime, items: [{ ...t, amount, entityVersion: version, isTombstone: null }] }) });
+    // "Wed Sep 9" sorts after "Mon Aug 31" as text only by luck; here the later change has the alphabetically EARLIER publish time
+    const m = parseYnab4Native([{ path: 'b.ynab4/data/DEV/Budget.yfull', text: JSON.stringify(y) }, diff('A-11', 'A-11,B-2', 'Fri Jan 2 10:00:00 GMT+0100 2026', -3, 'B-2'), diff('A-10', 'A-11', 'Mon Dec 1 10:00:00 GMT+0100 2025', -2, 'A-11')]);
+    expect(m.transactions[0].amount).toBe(-300); expect(m.warnings.find(w => w.code === 'diffs_applied')!.count).toBe(2);
+  });
+  it('hidden categories ("Group ` Name ` groupId"): back to a live group, or to a hidden group named after a deleted one; built-in Income master is not a group', () => {
+    const y: any = { fileMetaData: { currentKnowledge: 'A-5' }, accounts: [{ entityId: 'acc', accountName: 'Bank', accountType: 'Checking', onBudget: true }], transactions: [{ entityId: 't1', accountId: 'acc', date: '2025-01-01', amount: -5, categoryId: 'h2', cleared: 'Cleared' }],
+      masterCategories: [
+        { entityId: 'MasterCategory/__Hidden__', name: 'Hidden Categories', type: 'OUTFLOW', subCategories: [
+          { entityId: 'h1', name: 'Hverdag ` Avis ` LIVE-1', cachedBalance: 0 }, { entityId: 'h2', name: 'Gammel gruppe ` Fitness ` med backtick ` DEAD-1', cachedBalance: 0 }, { entityId: 'h3', name: 'Gammel gruppe ` Tv ` DEAD-1' }, { entityId: 'h4', name: 'Ukendt ` Ting ` GONE-9' }] },
+        { entityId: 'MasterCategory/__Income__', name: 'Income', type: 'INFLOW', subCategories: null }, { entityId: 'MasterCategory/__Internal__', name: '__Internal__', type: 'OUTFLOW', subCategories: null },
+        { entityId: 'LIVE-1', name: 'Hverdag', type: 'OUTFLOW', subCategories: [{ entityId: 'c1', name: 'Mad', cachedBalance: 0 }] }, { entityId: 'DEAD-1', name: 'Gammel gruppe', type: 'OUTFLOW', isTombstone: true, subCategories: null }] };
+    const m = parseYnab4Native([{ path: 'Budget.yfull', text: JSON.stringify(y) }]);
+    expect(m.groups.map(g => [g.name, g.hidden])).toEqual([['Hverdag', false], ['Gammel gruppe', true], ['Ukendt', true]]);
+    const where = (sid: string) => { const c = m.categories.find(x => x.sid === sid)!; return [m.groups.find(g => g.sid === c.groupSid)!.name, c.name, c.hidden]; };
+    expect(where('h1')).toEqual(['Hverdag', 'Avis', true]); expect(where('h2')).toEqual(['Gammel gruppe', 'Fitness ` med backtick', true]); expect(where('h3')).toEqual(['Gammel gruppe', 'Tv', true]); expect(where('h4')).toEqual(['Ukendt', 'Ting', true]);
+    expect(m.expected.categoryBalances).toEqual([]); // cachedBalance is 0 everywhere in real files: never treated as evidence
+    const dst = memBudget(); expect(applyImport(dst, m, 'fp').status).toBe('verified'); expect(dst.listGroups().map(g => [g.name, g.hidden])).toEqual([['Hverdag', false], ['Gammel gruppe', true], ['Ukendt', true]]);
   });
   it('rejects files that are not a YNAB4 budget', () => {
     expect(() => parseYnab4Native([{ path: 'Budget.yfull', text: '{"hello":1}' }])).toThrow(/does not look like/);

@@ -58,7 +58,14 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
   const auth = core.auth;
   const secure = (req: FastifyRequest) => req.protocol === 'https';
   const cookieName = (req: FastifyRequest) => (secure(req) ? '__Host-br_session' : 'br_session');
-  const isLoopback = (req: FastifyRequest) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip) && !req.headers['x-forwarded-for'];
+  /**
+   * First-run setup without a token is allowed only for someone sitting at the server itself. Behind a reverse
+   * proxy every visitor arrives from 127.0.0.1, so the request must also be addressed to localhost and carry no
+   * proxy headers, and the exemption is off entirely once the installation is configured for proxy/HTTPS use.
+   */
+  const isLoopback = (req: FastifyRequest) => !cfg.trustProxy && !cfg.requireHttps && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip)
+    && /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(req.headers.host ?? '')
+    && !['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip', 'via'].some(h => req.headers[h] !== undefined);
 
   app.addHook('onRequest', async (req, reply) => {
     // --- network allow-list (VPN-only deployments)
@@ -265,11 +272,26 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
   });
 
   // ================================================================= per-budget API
-  const svcOf = (req: FastifyRequest) => core.service((req.params as { bid: string }).bid);
+  /**
+   * Budget for this request. For writes, the revision the client last saw (X-Budget-Revision) is handed to the
+   * service, which verifies it inside the write transaction: a change made elsewhere in the meantime is never
+   * silently overwritten — the write is refused with 409 STALE instead.
+   */
+  const svcOf = (req: FastifyRequest) => {
+    const svc = core.service((req.params as { bid: string }).bid);
+    const h = req.headers['x-budget-revision'];
+    // always (re)set, so an expectation can never leak from one request into another
+    svc.expectRevision(req.method !== 'GET' && typeof h === 'string' && /^\d{1,15}$/.test(h) ? Number(h) : null);
+    return svc;
+  };
+  app.addHook('onSend', async (req, reply) => {
+    const bid = (req.params as { bid?: string } | undefined)?.bid;
+    if (bid && req.session && reply.statusCode < 500) { try { reply.header('X-Budget-Revision', core.service(bid).revision()); } catch { /* unknown budget: nothing to report */ } }
+  });
   const P = '/api/b/:bid';
   app.get(`${P}/bootstrap`, async req => {
     const s = svcOf(req); const posted = s.postScheduled();
-    return { id: s.id, settings: s.getSettings(), accounts: s.listAccounts(), groups: s.listGroups(), categories: s.listCategories(), payees: s.listPayees(), undo: s.undoStatus(), range: s.budgetRange(),
+    return { id: s.id, revision: s.revision(), settings: s.getSettings(), accounts: s.listAccounts(), groups: s.listGroups(), categories: s.listCategories(), payees: s.listPayees(), undo: s.undoStatus(), range: s.budgetRange(),
       scheduledPosted: posted.posted, today: todayISO(), lastImport: (s.db.prepare('SELECT summary FROM imports ORDER BY at DESC LIMIT 1').get() as { summary: string } | undefined)?.summary ?? null };
   });
   app.put(`${P}/settings`, async req => {

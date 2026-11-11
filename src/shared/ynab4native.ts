@@ -22,7 +22,7 @@ const FREQ: Record<string, Frequency> = { Once: 'once', Never: 'once', Daily: 'd
   Every4Weeks: 'every_4_weeks', Monthly: 'monthly', EveryOtherMonth: 'every_other_month', Every3Months: 'every_3_months', Every4Months: 'every_4_months',
   TwiceAYear: 'twice_a_year', Yearly: 'yearly', EveryOtherYear: 'every_other_year' };
 const CAT_IMMEDIATE = 'Category/__ImmediateIncome__', CAT_DEFERRED = 'Category/__DeferredIncome__', CAT_SPLIT = 'Category/__Split__';
-const MASTER_INTERNAL = 'MasterCategory/__Internal__', MASTER_HIDDEN = 'MasterCategory/__Hidden__';
+const MASTER_INTERNAL = 'MasterCategory/__Internal__', MASTER_HIDDEN = 'MasterCategory/__Hidden__', MASTER_INCOME = 'MasterCategory/__Income__';
 
 const base = (p: string) => p.replace(/\\/g, '/').split('/').pop()!;
 const norm = (p: string) => p.replace(/\\/g, '/');
@@ -38,43 +38,56 @@ export function isYnab4Native(files: SourceFile[]): boolean {
 }
 
 /** Pick the most complete Budget.yfull and fold in newer .ydiff changes from other devices. */
-export function loadYfull(files: SourceFile[], warnings: ImportWarning[]): { budget: any; name: string } {
-  const yfulls = files.filter(f => /\.yfull$/i.test(f.path));
-  if (!yfulls.length) throw new Error('No Budget.yfull file found. Select the whole .ynab4 folder (or a zip of it), or the Budget.yfull file itself.');
-  let name = 'Imported YNAB4 budget';
-  const folder = /([^/]+?)(?:~[0-9A-F]{6,})?\.ynab4\//i.exec(norm(yfulls[0].path)); if (folder) name = folder[1];
-  let dataFolder: string | null = null;
-  const meta = files.find(f => /\.ymeta$/i.test(f.path));
-  if (meta) { try { dataFolder = JSON.parse(meta.text).relativeDataFolderName ?? null; } catch { warnings.push({ level: 'warning', code: 'ymeta_unreadable', message: 'Budget.ymeta could not be read; using the first Budget.yfull found.' }); } }
-  const devices = files.filter(f => /\.ydevice$/i.test(f.path)).map(f => { try { return JSON.parse(f.text); } catch { return null; } }).filter(Boolean) as any[];
-  const scored = yfulls.map(f => {
-    const p = norm(f.path); const dev = devices.find(d => d.deviceGUID && p.includes('/' + d.deviceGUID + '/'));
-    const inData = dataFolder ? p.includes('/' + dataFolder + '/') || p.startsWith(dataFolder + '/') : true;
-    const total = [...parseKnowledge(dev?.knowledge).values()].reduce((a, b) => a + b, 0);
-    return { f, score: (inData ? 1e15 : 0) + (dev?.hasFullKnowledge ? 1e12 : 0) + total + f.text.length / 1e9 };
-  }).sort((a, b) => b.score - a.score);
-  if (yfulls.length > 1) warnings.push({ level: 'info', code: 'multiple_devices', message: `Found ${yfulls.length} device copies of the budget; using the most complete one (${norm(scored[0].f.path).split('/').slice(-2).join('/')}).` });
-  let budget: any;
-  try { budget = JSON.parse(scored[0].f.text); } catch (e) { throw new Error('Budget.yfull is not valid JSON: ' + (e as Error).message); }
-  if (!budget || !Array.isArray(budget.transactions) || !Array.isArray(budget.accounts)) throw new Error('Budget.yfull does not look like a YNAB4 budget (no accounts/transactions).');
+/** AppleDouble resource forks ("._name") and __MACOSX folders in Mac-made zips are not budget data. */
+const isJunk = (p: string) => /(^|\/)__MACOSX\//.test(norm(p)) || base(p).startsWith('._');
+const knowledgeSum = (k: Map<string, number>) => [...k.values()].reduce((a, b) => a + b, 0);
+const covers = (a: Map<string, number>, b: Map<string, number>) => [...b].every(([d, v]) => (a.get(d) ?? 0) >= v);
 
-  // Apply sync diffs the chosen full copy has not seen yet.
-  const known = parseKnowledge(budget.fileMetaData?.currentKnowledge);
-  const diffs = files.filter(f => /\.ydiff$/i.test(f.path) && (!dataFolder || norm(f.path).includes(dataFolder)))
-    .map(f => { try { return JSON.parse(f.text); } catch { return null; } }).filter(d => d && Array.isArray(d.items)) as any[];
-  diffs.sort((a, b) => String(a.publishTime ?? '').localeCompare(String(b.publishTime ?? '')) || (versionOf(a.endVersion)?.[1] ?? 0) - (versionOf(b.endVersion)?.[1] ?? 0));
+/**
+ * Pick the authoritative Budget.yfull and fold in sync diffs it has not seen. Rules, all verified on a real
+ * multi-device budget:
+ *  - "Budget.ymeta" (exactly that name) names the live data folder; Dropbox "conflicted copy" .ymeta files and
+ *    old data folders are ignored.
+ *  - Each device folder holds a Budget.yfull whose fileMetaData.currentKnowledge ("A-123,B-45,…") says which
+ *    changes of every device it already contains. The copy with the most knowledge wins.
+ *  - A .ydiff item is applied only when its entityVersion is NOT covered by that knowledge. Diffs are applied in
+ *    causal order = ascending sum of their knowledge counters (publishTime is display text and does not sort).
+ */
+export function loadYfull(input: SourceFile[], warnings: ImportWarning[]): { budget: any; name: string } {
+  const files = input.filter(f => !isJunk(f.path));
+  const allYfull = files.filter(f => /\.yfull$/i.test(f.path));
+  if (!allYfull.length) throw new Error('No Budget.yfull file found. Select the whole .ynab4 folder (or a zip of it), or the Budget.yfull file itself.');
+  let name = 'Imported YNAB4 budget';
+  const folder = /([^/]+?)(?:~[0-9A-F]{6,})?\.ynab4\//i.exec(norm(allYfull[0].path)); if (folder) name = folder[1];
+  let dataFolder: string | null = null;
+  const metas = files.filter(f => /\.ymeta$/i.test(f.path));
+  const meta = metas.find(f => base(f.path).toLowerCase() === 'budget.ymeta') ?? (metas.length === 1 ? metas[0] : undefined);
+  if (metas.length > 1) warnings.push({ level: 'info', code: 'ymeta_conflicted_copies', message: `${metas.length - 1} leftover "conflicted copy" metadata file(s) from file syncing were ignored; ${meta ? 'Budget.ymeta decides which data folder is current' : 'no plain Budget.ymeta was found'}.`, count: metas.length - 1 });
+  if (meta) { try { dataFolder = JSON.parse(meta.text).relativeDataFolderName ?? null; } catch { warnings.push({ level: 'warning', code: 'ymeta_unreadable', message: 'Budget.ymeta could not be read; using the most complete Budget.yfull found.' }); } }
+  else if (metas.length > 1) warnings.push({ level: 'warning', code: 'ymeta_missing', message: 'Only conflicted copies of Budget.ymeta exist; using the most complete Budget.yfull found. Check that the newest data was imported.' });
+  const inData = (p: string) => !dataFolder || norm(p).includes('/' + dataFolder + '/') || norm(p).startsWith(dataFolder + '/');
+  let yfulls = allYfull.filter(f => inData(f.path));
+  if (!yfulls.length) { yfulls = allYfull; warnings.push({ level: 'warning', code: 'data_folder_missing', message: `The data folder named in Budget.ymeta (${dataFolder}) contains no Budget.yfull; using the most complete copy found elsewhere.` }); dataFolder = null; }
+  const parsed = yfulls.map(f => { try { const budget = JSON.parse(f.text); return budget && Array.isArray(budget.transactions) && Array.isArray(budget.accounts) ? { f, budget, known: parseKnowledge(budget.fileMetaData?.currentKnowledge) } : null; } catch { return null; } })
+    .filter((x): x is { f: SourceFile; budget: any; known: Map<string, number> } => !!x);
+  if (!parsed.length) {
+    try { JSON.parse(yfulls[0].text); } catch (e) { throw new Error('Budget.yfull is not valid JSON: ' + (e as Error).message); }
+    throw new Error('Budget.yfull does not look like a YNAB4 budget (no accounts/transactions).');
+  }
+  parsed.sort((a, b) => knowledgeSum(b.known) - knowledgeSum(a.known) || b.f.text.length - a.f.text.length);
+  const chosen = parsed[0]; const budget = chosen.budget, known = chosen.known;
+  if (parsed.length > 1) {
+    const diverged = parsed.slice(1).filter(o => !covers(known, o.known));
+    warnings.push(diverged.length
+      ? { level: 'warning', code: 'devices_diverged', message: `${parsed.length} device copies of the budget exist and ${diverged.length} of them contain changes the most complete copy has not seen. The most complete copy is used and unseen changes are merged from the sync files below — compare recent entries with YNAB4.` }
+      : { level: 'info', code: 'multiple_devices', message: `Found ${parsed.length} device copies of the budget; they agree, and the most complete one is used.` });
+  }
+  // Sync diffs: only changes the chosen full copy has not seen, in causal order.
+  const diffs = files.filter(f => /\.ydiff$/i.test(f.path) && inData(f.path)).map(f => { try { return JSON.parse(f.text); } catch { return null; } }).filter(d => d && Array.isArray(d.items)) as any[];
+  const diffOrder = (d: any) => { const k = parseKnowledge(d.startVersion); for (const [dev, v] of parseKnowledge(d.endVersion)) k.set(dev, Math.max(k.get(dev) ?? 0, v)); return knowledgeSum(k); };
+  diffs.sort((a, b) => diffOrder(a) - diffOrder(b));
   let applied = 0, unknown = 0;
-  const newer = (incoming: any, current: any) => {
-    const a = versionOf(incoming.entityVersion), b = versionOf(current?.entityVersion);
-    if (!a) return false; if (!b) return true;
-    return a[0] === b[0] ? a[1] > b[1] : true; // different devices: later-published diff wins (diffs are applied in publish order)
-  };
-  const upsert = (list: any[], item: any) => {
-    const i = list.findIndex(x => x.entityId === item.entityId);
-    if (i < 0) { list.push(item); return true; }
-    if (newer(item, list[i])) { list[i] = { ...list[i], ...item }; return true; }
-    return false;
-  };
+  const upsert = (list: any[], item: any) => { const i = list.findIndex(x => x.entityId === item.entityId); if (i < 0) list.push(item); else list[i] = { ...list[i], ...item }; return true; };
   for (const d of diffs) for (const item of d.items) {
     const v = versionOf(item.entityVersion); if (!v || (known.get(v[0]) ?? 0) >= v[1]) continue;
     let ok = false;
@@ -91,12 +104,13 @@ export function loadYfull(files: SourceFile[], warnings: ImportWarning[]): { bud
       case 'monthlyCategoryBudget': { let mb = (budget.monthlyBudgets ??= []).find((m: any) => m.entityId === item.parentMonthlyBudgetId);
         if (!mb && /^MB\/\d{4}-\d{2}$/.test(item.parentMonthlyBudgetId ?? '')) { mb = { entityType: 'monthlyBudget', entityId: item.parentMonthlyBudgetId, month: item.parentMonthlyBudgetId.slice(3) + '-01', monthlySubCategoryBudgets: [] }; budget.monthlyBudgets.push(mb); }
         if (mb) ok = upsert((mb.monthlySubCategoryBudgets ??= []), item); break; }
-      case 'budgetMetaData': case 'fileMetaData': case 'accountMapping': case 'payeeLocation': case 'payeeRenameCondition': case 'payeeStringCondition': case 'setting': ok = false; break;
+      // known kinds that carry nothing Budget Reborn imports
+      case 'budgetMetaData': case 'fileMetaData': case 'accountMapping': case 'payeeLocation': case 'payeeRenameCondition': case 'payeeStringCondition': case 'setting': break;
       default: unknown++;
     }
     if (ok) applied++;
   }
-  if (applied) warnings.push({ level: 'info', code: 'diffs_applied', message: `Applied ${applied} newer change(s) from sync files (.ydiff) that were not yet in the full budget copy.`, count: applied });
+  if (applied) warnings.push({ level: 'warning', code: 'diffs_applied', message: `${applied} change(s) from sync files (.ydiff) were newer than the full budget copy and were merged into it. Open the budget in YNAB4 once (so it saves a complete copy) for a migration without merging, or compare the most recent entries afterwards.`, count: applied });
   if (unknown) warnings.push({ level: 'warning', code: 'diff_unknown_entities', message: `${unknown} change(s) in sync files were of an unknown kind and were skipped.`, count: unknown });
   return { budget, name };
 }
@@ -129,7 +143,7 @@ export function parseYnab4Native(files: SourceFile[]): ImportModel {
   const masters = [...(b.masterCategories ?? [])].sort((x: any, y: any) => (x.sortableIndex ?? 0) - (y.sortableIndex ?? 0));
   const groupByName = new Map<string, string>();
   for (const m of masters) {
-    if (m.entityId === MASTER_INTERNAL || m.entityId === MASTER_HIDDEN || m.name === 'Hidden Categories') continue;
+    if (m.entityId === MASTER_INTERNAL || m.entityId === MASTER_INCOME || m.entityId === MASTER_HIDDEN || m.name === 'Hidden Categories') continue;
     const subs = (m.subCategories ?? []) as any[];
     if (m.isTombstone) { subs.forEach(s => tombCats.set(s.entityId, { ...s, _master: m.name })); continue; }
     model.groups.push({ sid: m.entityId, name: String(m.name), hidden: false, note: m.note ?? '' }); groupByName.set(String(m.name), m.entityId);
@@ -144,13 +158,29 @@ export function parseYnab4Native(files: SourceFile[]): ImportModel {
     if (!sid) { sid = 'group:' + gname; model.groups.push({ sid, name: gname, hidden, note: '' }); groupByName.set(gname, sid); }
     return sid;
   };
-  for (const m of masters) { // hidden categories: "Master ` Sub ` index"
+  // Hidden categories live under MasterCategory/__Hidden__ and are named
+  //   "<original group name> ` <category name> ` <original group entityId>"
+  // (observed in a real budget; the original group may itself be deleted). They return to their original group when it
+  // still exists, otherwise to a hidden group carrying the original group's name.
+  const masterById = new Map<string, any>(masters.map((m: any) => [m.entityId, m]));
+  const hiddenGroups = new Map<string, string>(); const liveGroupIds = new Set(model.groups.map(g => g.sid));
+  for (const m of masters) {
     if (m.entityId !== MASTER_HIDDEN && m.name !== 'Hidden Categories') continue;
     for (const s of (m.subCategories ?? []) as any[]) {
       if (s.isTombstone) { tombCats.set(s.entityId, { ...s, _master: 'Hidden Categories' }); continue; }
-      const parts = /^(.*) ` (.*) ` \d*$/.exec(String(s.name)) ?? /^(.*) ` (.*)$/.exec(String(s.name));
-      const gsid = ensureGroup(parts ? parts[1] : 'Hidden Categories', !parts);
-      model.categories.push({ sid: s.entityId, groupSid: gsid, name: parts ? parts[2] : String(s.name), hidden: true, note: s.note ?? '' }); catMap.set(s.entityId, s.entityId);
+      const parts = String(s.name).split(' ` ');
+      let gsid: string, cname = String(s.name);
+      if (parts.length >= 3) {
+        const origId = parts[parts.length - 1], orig = masterById.get(origId); cname = parts.slice(1, -1).join(' ` ');
+        if (orig && !orig.isTombstone && liveGroupIds.has(origId)) gsid = origId;
+        else {
+          const gname = String(orig?.name ?? parts[0]) || 'Hidden Categories'; const key = orig ? origId : 'name:' + gname;
+          gsid = hiddenGroups.get(key) ?? ''; if (!gsid) { gsid = 'hidden-group:' + key; hiddenGroups.set(key, gsid); model.groups.push({ sid: gsid, name: gname, hidden: true, note: '' }); }
+        }
+      } else if (parts.length === 2) { cname = parts[1]; gsid = groupByName.get(parts[0]) ?? ensureGroup(parts[0], true); }
+      else gsid = ensureGroup('Hidden Categories', true);
+      model.categories.push({ sid: s.entityId, groupSid: gsid, name: cname || String(s.name), hidden: true, note: s.note ?? '' }); catMap.set(s.entityId, s.entityId);
+      if (typeof s.cachedBalance === 'number') model.expected.categoryBalances.push({ categorySid: s.entityId, balance: minor(s.cachedBalance) });
     }
   }
   const revived = count('deleted_category_in_use', n => `${n} deleted categor${n === 1 ? 'y is' : 'ies are'} still referenced by transactions or budgets and were kept as hidden categories.`);
@@ -212,6 +242,7 @@ export function parseYnab4Native(files: SourceFile[]): ImportModel {
   }
   [badAccount, badDate, brokenTransfer, splitMismatch].forEach(c => c.done());
   model.expected.transactionCount = live.length;
+  if (model.expected.categoryBalances.every(c => c.balance === 0)) model.expected.categoryBalances = []; // YNAB4 writes cachedBalance 0 for every category: not usable as evidence
   for (const a of model.accounts) model.expected.accountBalances.push({ accountSid: a.sid, balance: Number(sums.get(a.sid) ?? 0n), basis: 'sum of the source file amounts, computed independently of the import' });
 
   // monthly budgets

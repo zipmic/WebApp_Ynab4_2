@@ -4,12 +4,13 @@
  */
 import Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 
 export type DB = Database.Database;
 export const newId = () => randomBytes(12).toString('hex');
 export const nowIso = () => new Date().toISOString();
 
-const BUDGET_MIGRATIONS: string[] = [
+export const BUDGET_MIGRATIONS: string[] = [
   `
   CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE accounts(
@@ -94,6 +95,12 @@ const BUDGET_MIGRATIONS: string[] = [
     ('income:this', 'group:income', 'Available this month', 0, 'income_this'),
     ('income:next', 'group:income', 'Available next month', 1, 'income_next');
   `,
+  // v2: monotonically increasing revision of the budget, used to detect edits made from another device.
+  // Deliberately NOT one of the undo-tracked tables: undoing a change is itself a new revision.
+  `
+  CREATE TABLE revision(id INTEGER PRIMARY KEY CHECK(id = 1), n INTEGER NOT NULL);
+  INSERT INTO revision VALUES(1, 1);
+  `,
 ];
 
 /** Tables whose changes are recorded for undo/redo. */
@@ -118,9 +125,18 @@ const SYSTEM_MIGRATIONS: string[] = [
   `,
 ];
 
-function migrate(db: DB, migrations: string[]) {
+/**
+ * Applies pending migrations, each in its own transaction together with its version bump: a migration either
+ * happens completely or not at all, and a failure leaves the database at the last good version.
+ * Before an EXISTING database file is upgraded, a complete copy is written next to it (`<file>.pre-v<N>.bak`).
+ */
+export function migrate(db: DB, migrations: string[], file?: string) {
   const current = db.pragma('user_version', { simple: true }) as number;
   if (current > migrations.length) throw new Error(`Database schema (v${current}) is newer than this application supports (v${migrations.length}).`);
+  if (current > 0 && current < migrations.length && file && file !== ':memory:') {
+    const copy = `${file}.pre-v${migrations.length}.bak`;
+    if (!existsSync(copy)) db.prepare('VACUUM INTO ?').run(copy);
+  }
   for (let v = current; v < migrations.length; v++) {
     db.transaction(() => { db.exec(migrations[v]); db.pragma(`user_version = ${v + 1}`); })();
   }
@@ -137,9 +153,9 @@ function open(file: string): DB {
 
 export const BUDGET_SCHEMA_VERSION = BUDGET_MIGRATIONS.length;
 
-export function openBudgetDb(file: string): DB {
+export function openBudgetDb(file: string, migrations: string[] = BUDGET_MIGRATIONS): DB {
   const db = open(file);
-  migrate(db, BUDGET_MIGRATIONS);
+  try { migrate(db, migrations, file); } catch (e) { db.close(); throw e; }
   installUndoTriggers(db);
   return db;
 }

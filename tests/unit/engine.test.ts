@@ -46,6 +46,21 @@ describe('budget engine (pure)', () => {
     const r = computeBudget({ categoryIds: ['a'], through: '2026-03', activity: [{ month: '2026-01', categoryId: INCOME_THIS, amount: 100000 }], budgets: [{ month: '2026-03', categoryId: 'a', budgeted: 60000, overspending: null }] });
     expect(r.months.get('2026-01')!.availableToBudget).toBe(100000); expect(r.months.get('2026-02')!.availableToBudget).toBe(100000); expect(r.months.get('2026-03')!.availableToBudget).toBe(40000);
   });
+  it('red arrow toggled on and off repeatedly (the pattern found in a real 12-year budget): each setting holds until the next one', () => {
+    const b = (month: string, overspending: any, budgeted = 0) => ({ month, categoryId: 'debt', budgeted, overspending });
+    const r = computeBudget({ categoryIds: ['debt'], through: '2026-08', activity: [{ month: '2026-01', categoryId: 'debt', amount: -90000 }, { month: '2026-01', categoryId: INCOME_THIS, amount: 100000 }],
+      budgets: [b('2026-01', 'confined', 10000), b('2026-02', null, 10000), b('2026-03', 'affects_buffer', 10000), b('2026-04', null, 10000), b('2026-05', 'confined'), b('2026-06', null, 5000)] });
+    const at = (m: string) => [r.months.get(m)!.categories.get('debt')!.available, r.months.get(m)!.availableToBudget];
+    expect(at('2026-01')).toEqual([-80000, 90000]); expect(at('2026-02')).toEqual([-70000, 80000]); // confined, inherited in February
+    expect(at('2026-03')).toEqual([-60000, 70000]); // switched off in March: March's shortfall will hit April's Available to Budget
+    expect(at('2026-04')).toEqual([10000, 0]); expect(r.months.get('2026-04')!.overspentPrev).toBe(60000); // category restarted from zero
+    expect(at('2026-06')).toEqual([15000, -5000]); expect(r.months.get('2026-06')!.categories.get('debt')!.handling).toBe('confined'); // on again from May, inherited in June
+  });
+  it('income categorised straight to a spending category raises that category, not Available to Budget; refunds likewise', () => {
+    const r = computeBudget({ categoryIds: ['a'], through: '2026-02', budgets: [], activity: [{ month: '2026-01', categoryId: 'a', amount: 25000 }, { month: '2026-02', categoryId: 'a', amount: -10000 }] });
+    expect(r.months.get('2026-01')!).toMatchObject({ income: 0, availableToBudget: 0 }); expect(r.months.get('2026-01')!.categories.get('a')!.available).toBe(25000);
+    expect(r.months.get('2026-02')!.categories.get('a')!.available).toBe(15000);
+  });
   it('rejects non-integer money', () => {
     expect(() => computeBudget({ categoryIds: ['a'], through: '2026-01', activity: [{ month: '2026-01', categoryId: 'a', amount: 0.1 }], budgets: [] })).toThrow();
   });

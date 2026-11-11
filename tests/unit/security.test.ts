@@ -19,6 +19,12 @@ describe('authentication and authorisation', () => {
     expect((await app.inject({ method: 'GET', url: '/api/auth/status', remoteAddress: '203.0.113.9' })).json().setupNeedsToken).toBe(true);
     expect((await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { username: 'owner', password: 'short' }, remoteAddress: '127.0.0.1' })).statusCode).toBe(400);
     expect(token.length).toBeGreaterThan(20);
+    // behind a reverse proxy every visitor arrives from 127.0.0.1: only a request addressed to localhost, without proxy headers, is "local"
+    const viaProxy = (headers: Record<string, string>) => app.inject({ method: 'POST', url: '/api/auth/setup', payload: { username: 'evil', password: 'a-long-test-password' }, remoteAddress: '127.0.0.1', headers });
+    expect((await viaProxy({ host: 'budget.example.com' })).json().error.code).toBe('SETUP_TOKEN');
+    expect((await viaProxy({ host: 'localhost', 'x-forwarded-for': '203.0.113.9' })).json().error.code).toBe('SETUP_TOKEN');
+    expect((await viaProxy({ host: 'localhost', via: '1.1 proxy' })).json().error.code).toBe('SETUP_TOKEN');
+    expect((await app.inject({ method: 'GET', url: '/api/auth/status', remoteAddress: '127.0.0.1', headers: { host: 'budget.example.com' } })).json().setupNeedsToken).toBe(true);
   });
   it('setup creates the single user with an Argon2id hash; there is no second registration', async () => {
     h = await login(app);

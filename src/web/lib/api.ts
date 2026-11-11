@@ -5,11 +5,22 @@ export class ApiError extends Error {
 let csrf: string | null = null;
 export const setCsrf = (t: string | null) => { csrf = t; };
 let onUnauthenticated: (() => void) | null = null;
+/**
+ * Optimistic concurrency. For every budget we remember the revision this browser last saw and send it with each
+ * write; the server refuses the write (409 STALE) if the budget has changed elsewhere since.
+ */
+const revisions = new Map<string, number>();
+export const getRevision = (bid: string) => revisions.get(bid);
+export const setRevision = (bid: string, rev: number) => { revisions.set(bid, rev); };
+let onStale: ((bid: string) => void) | null = null;
+export const setStaleHandler = (fn: (bid: string) => void) => { onStale = fn; };
 export const setUnauthenticatedHandler = (fn: () => void) => { onUnauthenticated = fn; };
 
 export async function api<T = any>(method: string, url: string, body?: unknown, opts: { headers?: Record<string, string>; raw?: BodyInit } = {}): Promise<T> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (method !== 'GET' && csrf) headers['x-csrf-token'] = csrf;
+  const bid = /^\/b\/([0-9a-f]+)\//.exec(url)?.[1];
+  if (bid && method !== 'GET' && revisions.has(bid)) headers['x-budget-revision'] = String(revisions.get(bid));
   let payload: BodyInit | undefined = opts.raw;
   if (body !== undefined && !opts.raw) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
   let res: Response;
@@ -20,8 +31,12 @@ export async function api<T = any>(method: string, url: string, body?: unknown, 
   if (!res.ok) {
     const e = data?.error;
     if (res.status === 401 && e?.code === 'UNAUTHENTICATED') onUnauthenticated?.();
+    if (bid && e?.code === 'STALE') { if (typeof e.details?.revision === 'number') revisions.set(bid, e.details.revision); onStale?.(bid); }
     throw new ApiError(res.status, e?.code ?? 'ERROR', e?.message ?? `Request failed (${res.status})`, e?.details);
   }
+  // our own successful write moves us to the new revision; reads never do (the views they belong to may be older)
+  const rev = res.headers.get('x-budget-revision');
+  if (bid && method !== 'GET' && rev && /^\d+$/.test(rev)) revisions.set(bid, Number(rev));
   return data as T;
 }
 export const get = <T = any>(url: string) => api<T>('GET', url);

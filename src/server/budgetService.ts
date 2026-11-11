@@ -32,7 +32,23 @@ export class BudgetService {
   private engineCache: { version: number; result: EngineResult } | null = null;
   private accountsCache: { version: number; list: Account[] } | null = null;
   private inMutation = false;
+  /** Revision the caller last saw; when set, the next write fails with 409 STALE unless it is still current. */
+  private expected: number | null = null;
   constructor(public readonly db: DB, public readonly id: string) {}
+
+  /** Monotonic revision of this budget, bumped by every committed write (including undo/redo and imports). */
+  revision(): number { return (this.db.prepare('SELECT n FROM revision WHERE id=1').get() as { n: number }).n; }
+  /** Optimistic concurrency: the next write on this service must find the budget at exactly this revision. */
+  expectRevision(rev: number | null) { this.expected = rev; return this; }
+  /** Called INSIDE the write transaction: compare-and-increment is atomic with the change itself. */
+  private bumpRevision() {
+    const want = this.expected; this.expected = null;
+    if (want !== null) {
+      const cur = this.revision();
+      if (cur !== want) throw new AppError(409, 'STALE', 'This budget was changed from another device or window. Your view has been refreshed — check the latest data and repeat your change.', { revision: cur });
+    }
+    this.db.prepare('UPDATE revision SET n=n+1 WHERE id=1').run();
+  }
 
   // ---------------------------------------------------------------- transactions & undo plumbing
   /** Run a write as one atomic, undoable user action. */
@@ -41,6 +57,7 @@ export class BudgetService {
     this.inMutation = true;
     try {
       const out = this.db.transaction(() => {
+        this.bumpRevision();
         const grp = (this.db.prepare('SELECT COALESCE(MAX(grp),0)+1 g FROM undo_groups').get() as { g: number }).g;
         // a new action invalidates the redo stack
         this.db.exec(`DELETE FROM undo_log WHERE grp IN (SELECT grp FROM undo_groups WHERE kind='redo'); DELETE FROM undo_groups WHERE kind='redo'`);
@@ -56,7 +73,7 @@ export class BudgetService {
       }).immediate();
       this.version++;
       return out;
-    } finally { this.inMutation = false; }
+    } finally { this.inMutation = false; this.expected = null; }
   }
   /** Atomic write without undo recording (bulk imports). Clears undo history since it can no longer be replayed safely. */
   bulk<T>(fn: () => T): T {
@@ -64,6 +81,7 @@ export class BudgetService {
     try {
       const out = this.db.transaction(() => {
         this.db.exec('UPDATE undo_state SET active=0; DELETE FROM undo_log; DELETE FROM undo_groups;');
+        this.bumpRevision();
         return fn();
       }).immediate();
       this.version++;
@@ -72,8 +90,9 @@ export class BudgetService {
   }
   private replay(kind: 'undo' | 'redo'): string | null {
     const g = this.db.prepare(`SELECT grp, label FROM undo_groups WHERE kind=? ORDER BY grp DESC LIMIT 1`).get(kind) as { grp: number; label: string } | undefined;
-    if (!g) return null;
-    this.db.transaction(() => {
+    if (!g) { this.expected = null; return null; }
+    try { this.db.transaction(() => {
+      this.bumpRevision();
       this.db.pragma('defer_foreign_keys = ON');
       const stmts = this.db.prepare('SELECT sql FROM undo_log WHERE grp=? ORDER BY seq DESC').all(g.grp) as { sql: string }[];
       const ng = (this.db.prepare('SELECT COALESCE(MAX(grp),0)+1 g FROM undo_groups').get() as { g: number }).g;
@@ -83,7 +102,7 @@ export class BudgetService {
       this.db.prepare('UPDATE undo_state SET active=0').run();
       this.db.prepare('DELETE FROM undo_log WHERE grp=?').run(g.grp);
       this.db.prepare('DELETE FROM undo_groups WHERE grp=?').run(g.grp);
-    }).immediate();
+    }).immediate(); } finally { this.expected = null; }
     this.version++;
     return g.label;
   }
