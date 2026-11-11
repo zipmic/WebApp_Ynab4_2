@@ -230,3 +230,23 @@ describe('native YNAB4 (.ynab4 folder) migration', () => {
     expect(() => parseYnab4Native([{ path: 'a.ymeta', text: '{}' }])).toThrow(/No Budget.yfull/);
   });
 });
+
+describe('zip entry names (M4)', () => {
+  it('recovers UTF-8 names written without the UTF-8 flag and leaves everything else alone', async () => {
+    const { fixZipName } = await import('../../src/web/lib/files.ts');
+    const latin1 = (bytes: number[]) => String.fromCharCode(...bytes); // how fflate decodes unflagged names
+    const utf8 = (s: string) => latin1([...new TextEncoder().encode(s)]);
+    expect(fixZipName(utf8('ØkonomiKonto LATEST.ynab4/Budget.ymeta'))).toBe('ØkonomiKonto LATEST.ynab4/Budget.ymeta');
+    expect(fixZipName(utf8('Husholdning æøå ÆØÅ.ynab4/x'))).toBe('Husholdning æøå ÆØÅ.ynab4/x');
+    expect(fixZipName(latin1([0x42, 0x9b, 0x72, 0x73]))).toBe(latin1([0x42, 0x9b, 0x72, 0x73])); // not UTF-8: no code page is guessed
+    expect(fixZipName('Plain ASCII.ynab4/Budget.yfull')).toBe('Plain ASCII.ynab4/Budget.yfull');
+    expect(fixZipName('Økonomi.ynab4')).toBe('Økonomi.ynab4'); // flagged zip already decoded correctly: unchanged
+  });
+  it('the budget name suggested from a real-style Mac zip is readable', async () => {
+    const { fixZipName } = await import('../../src/web/lib/files.ts');
+    const src = memBudget(); generateBudget(src, { startMonth: '2025-01', months: 1, txPerMonth: 5 });
+    const garbled = String.fromCharCode(...new TextEncoder().encode('ØkonomiKonto LATEST.ynab4/data1~ABCDEF12/DEV/Budget.yfull'));
+    expect(parseYnab4Native([{ path: garbled, text: JSON.stringify(toYfull(src)) }]).budgetName).not.toBe('ØkonomiKonto LATEST');
+    expect(parseYnab4Native([{ path: fixZipName(garbled), text: JSON.stringify(toYfull(src)) }]).budgetName).toBe('ØkonomiKonto LATEST');
+  });
+});

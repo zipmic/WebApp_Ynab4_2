@@ -129,4 +129,3 @@ Every category-month is compared with the Budget export.
 2. `.ydiff` merging is exercised by synthetic tests and by an ordering check on real diffs, but no real budget needing a merge has been imported.
 3. Account types Cash, LineOfCredit, PayPal, MerchantAccount, InvestmentAccount, Mortgage and frequencies not in the list above were never seen in real data.
 4. Split-line transfers and scheduled splits do not occur in the real budget; only synthetic tests cover them.
-5. Zip file names with non-ASCII characters arrive garbled in the suggested budget name (editable in the wizard).

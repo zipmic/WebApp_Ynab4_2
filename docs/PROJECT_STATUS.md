@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1 (tool part) and M3. Test counts: 108 unit/integration tests, 18 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1 (tool part), M3 and M4. Test counts: 110 unit/integration tests, 18 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -12,6 +12,7 @@ Last updated after backlog items M1 (tool part) and M3. Test counts: 108 unit/in
 | Scheduled transactions (entered when due) | unit tests |
 | **Native YNAB4 import** | real budget: every financial area PASS; synthetic regression tests |
 | Independent migration audit + CLI (`npm run audit:ynab4`) | unit tests incl. deliberate damage detection; real budget |
+| Readable budget names from zips made without the UTF-8 name flag (macOS), e.g. folder names with Æ/Ø/Å (M4) | unit tests; checked on the owner's real zip (booleans only) |
 | Independent audit shown in the import wizard (verify + done steps) and Settings → Migration report; a FAIL verdict prevents the "verified" label (M3) | unit tests + browser step with a synthetic native budget |
 | Comparison of an import with YNAB4's own Budget export (`--budget-csv`, M1) | 8 synthetic tests (faithful import passes; wrong cell, unknown category, unreadable row, missing row detected; hidden categories and both Outflows sign conventions); **not yet run on the owner's real export** |
 | Import safety: preview without writing, new budget only, rollback on failure, duplicate-import guard | unit/API tests; real zip through the API |
@@ -41,13 +42,12 @@ Last updated after backlog items M1 (tool part) and M3. Test counts: 108 unit/in
 | Client handling of 409 STALE (refresh + message) | implemented; no browser test with two devices |
 
 ## Known bugs and rough edges
-1. Budget name suggested from a zip with non-ASCII folder name is garbled (editable in the wizard).
-2. Hidden categories are appended to the end of their group after import (original position inside the group is not stored by YNAB4 for hidden ones).
-3. OCR misreads bold text on dark-mode screenshots; affected rows are blocked for review, not imported wrongly.
-4. Scheduled-transaction dialog cannot edit split lines (imported splits are preserved).
-5. Date inputs follow the browser locale, not the budget's date format.
-6. `listPayees` counts uses with a correlated subquery; fine at 2,400 payees, watch if it grows.
-7. Reports "spending" clamps net-positive categories to zero in charts (tables show the real value).
+1. Hidden categories are appended to the end of their group after import (original position inside the group is not stored by YNAB4 for hidden ones).
+2. OCR misreads bold text on dark-mode screenshots; affected rows are blocked for review, not imported wrongly.
+3. Scheduled-transaction dialog cannot edit split lines (imported splits are preserved).
+4. Date inputs follow the browser locale, not the budget's date format.
+5. `listPayees` counts uses with a correlated subquery; fine at 2,400 payees, watch if it grows.
+6. Reports "spending" clamps net-positive categories to zero in charts (tables show the real value).
 
 ## Missing features (not started)
 Multi-month budget view · drag-and-drop reordering · configurable keyboard shortcuts · PIN lock · database encryption ·
