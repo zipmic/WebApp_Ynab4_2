@@ -86,7 +86,7 @@ Work top to bottom unless the owner says otherwise. Each task is small; finish, 
 ### I — Integrity follow-ups
 **I1. Browser test for two devices** — *done*: step "two devices" in `tests/e2e/run.mjs`. It also found and fixed a bug: a failed write left its optimistic value on screen; `mutate()` in `src/web/lib/store.tsx` now reloads after a failure.
 **I2. Persist login throttling** in `system.sqlite` (table `throttle(key, fails, first, locked_until, strikes)`), same behaviour as `Throttle`. Accept: lockout survives a restart (unit test).
-**I3. Restore from JSON export** (`/api/export/json` format): validate version, load into a new budget in one transaction, run `checkIntegrity`. Accept: round-trip test equals `dump()` of the original.
+**I3. Restore from JSON export** — *done*: `Core.restoreJson` (`src/server/core.ts`); `POST /api/restore` accepts either a `.budgetreborn` backup or the JSON export (detected by content). Unknown tables/fields are refused as "newer version" rather than dropped.
 
 ### U — UI and features (routine)
 **U1. Multi-month budget view** on wide screens (2–3 months side by side; reuse `BudgetMonth` queries). Accept: editing any month updates the others' Available to Budget.

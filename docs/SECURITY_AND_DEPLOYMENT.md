@@ -41,7 +41,7 @@ All settings: `.env.example`. First start prints a setup token (also in `<data>/
 - `BR_REQUIRE_HTTPS=1`: plain HTTP GET → 308 to HTTPS, other methods → 403.
 - `BR_ALLOWED_NETWORKS`: address prefixes allowed to connect at all (VPN-only mode).
 - `BR_TRUST_PROXY=1` must be set **only** behind a reverse proxy you control (it makes the server believe `X-Forwarded-*`).
-- Uploads: backups are validated (SQLite header, schema, integrity and foreign-key checks, financial consistency) in a private temp folder before being added as a new budget; images for the optional vision provider are checked by magic bytes, limited to 12 MB, held in memory only; JSON bodies are size-limited per route (2 MB default; 512 MB for YNAB4 import and restore, which need it).
+- Uploads: backups are validated (SQLite header, schema, integrity and foreign-key checks, financial consistency) in a private temp folder before being added as a new budget; JSON exports are loaded row by row through the schema's constraints in one transaction and must pass the same consistency check, otherwise the new budget is discarded; images for the optional vision provider are checked by magic bytes, limited to 12 MB, held in memory only; JSON bodies are size-limited per route (2 MB default; 512 MB for YNAB4 import and restore, which need it).
 - Only `dist/web` is served as static files. The data directory must be outside it and outside any web root.
 - Logs contain error messages and an audit trail of authentication events (IP, event) — never request bodies or financial data.
 - SQL is parameterised throughout; request bodies are validated with zod; amounts must be safe integers.

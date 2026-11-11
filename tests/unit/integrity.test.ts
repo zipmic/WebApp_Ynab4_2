@@ -231,3 +231,44 @@ describe('independent audit shown with every native import (M3)', () => {
     expect(r.status).toBe('needs_attention'); expect(r.ok).toBe(false); // …but the audit's FAIL decides
   });
 });
+
+describe('restore from the JSON export (I3)', () => {
+  let app: App, h: Record<string, string>, bid: string;
+  const restore = (body: string | Buffer) => app.inject({ method: 'POST', url: '/api/restore', headers: { ...h, 'content-type': 'application/octet-stream' }, payload: Buffer.isBuffer(body) ? body : Buffer.from(body) });
+  const budgets = async () => (await app.inject({ method: 'GET', url: '/api/budgets', headers: h })).json().length as number;
+  beforeAll(async () => {
+    ({ app } = await testApp()); h = await login(app); bid = (await app.inject({ method: 'POST', url: '/api/budgets', payload: { name: 'Original' }, headers: h })).json().id;
+    const s = app.core.service(bid); const g = generateBudget(s, { startMonth: '2025-01', months: 10, txPerMonth: 25, seed: 8 });
+    s.updateCategory(g.categories.Hobby, { hidden: true }); s.setMonthNote('2025-03', 'note'); s.setBudget('2025-04', g.categories.Bil, { note: 'cat note' });
+    s.saveScheduled({ accountId: g.accounts.checking, nextDate: '2099-01-01', frequency: 'monthly', payeeName: 'Boligforeningen', categoryId: g.categories.Husleje, memo: '', amount: -9500_00, flag: 'red', transferAccountId: null, splits: [] });
+    s.reconcile(g.accounts.savings, s.listAccounts().find(a => a.id === g.accounts.savings)!.clearedBalance);
+  });
+  afterAll(async () => { await app.close(); });
+  it('round trip: export → restore gives a new budget identical to the original', async () => {
+    const exp = await app.inject({ method: 'GET', url: `/api/b/${bid}/export/json`, headers: h }); expect(exp.statusCode).toBe(200);
+    const n = await budgets(); const r = await restore('﻿' + exp.body); expect(r.statusCode).toBe(200);
+    const { id, name } = r.json(); expect(id).not.toBe(bid); expect(name).toBe('Original (restored)'); expect(await budgets()).toBe(n + 1);
+    const a = app.core.service(bid), b = app.core.service(id);
+    expect(dump(b)).toBe(dump(a));
+    for (const m of ['2025-01', '2025-06', '2025-10', '2026-03']) expect(JSON.stringify(b.getBudget(m))).toBe(JSON.stringify(a.getBudget(m)));
+    expect(b.checkIntegrity()).toEqual([]); expect(b.undoStatus().undo).toBeNull();
+    // the restored budget is fully usable
+    b.createTransaction({ accountId: b.listAccounts()[0].id, date: '2025-11-02', payeeName: 'Ny', amount: -100 }); expect(b.checkIntegrity()).toEqual([]);
+  });
+  it('rejects damaged, foreign or newer exports and leaves no budget behind', async () => {
+    const good = JSON.parse((await app.inject({ method: 'GET', url: `/api/b/${bid}/export/json`, headers: h })).body);
+    const n = await budgets();
+    const bad = async (doc: any, status: number, code: string) => { const r = await restore(JSON.stringify(doc)); expect([r.statusCode, r.json().error.code]).toEqual([status, code]); expect(await budgets()).toBe(n); };
+    const clone = () => JSON.parse(JSON.stringify(good));
+    await bad({ hello: 1 }, 415, 'NOT_A_BACKUP');
+    await bad({ ...clone(), version: 2 }, 409, 'BACKUP_TOO_NEW');
+    { const d = clone(); d.tables.transactions[0].someNewField = 1; await bad(d, 409, 'BACKUP_TOO_NEW'); }
+    { const d = clone(); d.tables.newTable = []; await bad(d, 409, 'BACKUP_TOO_NEW'); }
+    { const d = clone(); d.tables.transactions[3].amount = 12.5; await bad(d, 422, 'BACKUP_CORRUPT'); }                       // float money
+    { const d = clone(); d.tables.transactions[3].account_id = 'nowhere'; await bad(d, 422, 'BACKUP_CORRUPT'); }             // broken link
+    { const d = clone(); const t = d.tables.transactions.find((x: any) => x.transfer_txn_id); t.amount += 1; await bad(d, 422, 'BACKUP_INCONSISTENT'); } // transfer creates money
+    { const d = clone(); d.tables.transactions[3].memo = { evil: true }; await bad(d, 422, 'BACKUP_CORRUPT'); }
+    expect((await restore('{not json')).statusCode).toBe(415);
+    expect(readdirSync(join(app.core.cfg.dataDir, 'budgets')).filter(f => f.endsWith('.sqlite')).length).toBe(n);
+  });
+});

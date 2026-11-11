@@ -120,6 +120,51 @@ export class Core {
     this.services.set(id, svc);
     return { id, name: finalName };
   }
+  /**
+   * Restore from the open JSON export (GET /api/b/:bid/export/json) as a NEW budget. Every row is validated by the
+   * schema's own constraints (integer amounts, dates, links), the whole load is one transaction, and the result
+   * must pass the financial consistency check — otherwise nothing is kept.
+   */
+  restoreJson(text: string, name?: string): { id: string; name: string } {
+    let doc: any;
+    try { doc = JSON.parse(text); } catch { throw new AppError(415, 'NOT_A_BACKUP', 'This file is not a Budget Reborn backup or export.'); }
+    if (doc?.format !== 'budget-reborn-export' || typeof doc.tables !== 'object' || doc.tables === null) throw new AppError(415, 'NOT_A_BACKUP', 'This file is not a Budget Reborn export.');
+    if (doc.version !== 1) throw new AppError(409, 'BACKUP_TOO_NEW', 'This export was made by a different version of Budget Reborn and cannot be read by this one.');
+    // parents before children; the transaction table's own links are checked at commit (deferred)
+    const ORDER = ['meta', 'accounts', 'category_groups', 'categories', 'payees', 'transactions', 'monthly_budgets', 'month_notes', 'scheduled', 'reconciliations', 'payee_rules', 'imports'];
+    for (const t of Object.keys(doc.tables)) if (!ORDER.includes(t)) throw new AppError(409, 'BACKUP_TOO_NEW', `The export contains data this version does not know ("${t.slice(0, 40)}").`);
+    for (const t of ORDER) if (doc.tables[t] !== undefined && !Array.isArray(doc.tables[t])) throw new AppError(422, 'BACKUP_CORRUPT', `The export is damaged ("${t}" is not a list).`);
+    const svc = this.createBudget('Restoring…');
+    try {
+      svc.bulk(() => {
+        svc.db.pragma('defer_foreign_keys = ON');
+        // a new budget file starts with the built-in income categories; the export carries its own copy of them
+        svc.db.exec('DELETE FROM meta; DELETE FROM categories; DELETE FROM category_groups;');
+        for (const t of ORDER) {
+          const rows = (doc.tables[t] ?? []) as Record<string, unknown>[];
+          if (!rows.length) continue;
+          const cols = new Set((svc.db.pragma(`table_info(${t})`) as { name: string }[]).map(c => c.name));
+          for (const r of rows) {
+            if (!r || typeof r !== 'object' || Array.isArray(r)) throw new AppError(422, 'BACKUP_CORRUPT', `The export is damaged (a row of "${t}" is not an object).`);
+            const keys = Object.keys(r);
+            for (const k of keys) if (!cols.has(k)) throw new AppError(409, 'BACKUP_TOO_NEW', `The export contains a field this version does not know ("${t}.${k.slice(0, 40)}").`);
+            for (const k of keys) { const v = r[k]; if (v !== null && typeof v !== 'string' && typeof v !== 'number') throw new AppError(422, 'BACKUP_CORRUPT', `The export is damaged (${t}.${k} has an invalid value).`); }
+            svc.db.prepare(`INSERT INTO ${t}(${keys.join(',')}) VALUES(${keys.map(() => '?').join(',')})`).run(...keys.map(k => r[k] as string | number | null));
+          }
+        }
+      });
+      const problems = svc.checkIntegrity();
+      if (problems.length) throw new AppError(422, 'BACKUP_INCONSISTENT', 'The export failed the financial consistency check: ' + problems[0]);
+      const finalName = (name?.trim() || `${svc.getSettings().name} (restored)`).slice(0, 100);
+      svc.bulk(() => svc.setMeta('settings', JSON.stringify({ ...svc.getSettings(), name: finalName })));
+      this.renameBudget(svc.id, finalName);
+      return { id: svc.id, name: finalName };
+    } catch (e) {
+      this.discardBudget(svc.id);
+      if (e instanceof AppError) throw e;
+      throw new AppError(422, 'BACKUP_CORRUPT', 'The export could not be restored: ' + String((e as Error).message).slice(0, 200) + '. Nothing was changed.');
+    }
+  }
   /** Budgets that were created from the same source files (duplicate-import guard). */
   findImports(fingerprint: string) {
     const out: { id: string; name: string; at: string }[] = [];

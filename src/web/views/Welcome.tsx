@@ -28,9 +28,9 @@ export function Welcome({ budgets, onOpen, canClose }: { budgets: BudgetInfo[]; 
         <div className="space-y-3">
           <Card primary icon={<FileUp size={20} />} title="Import YNAB4 budget" text="Bring your accounts, transactions, categories and budget history with you." onClick={() => go('ynab4-import')} />
           <Card icon={<Plus size={20} />} title="Create new budget" text="Start fresh with empty accounts and categories." onClick={() => setCreating(true)} />
-          <Card icon={<ArchiveRestore size={20} />} title="Restore backup" text="Open a .budgetreborn backup file. Existing budgets are never overwritten." onClick={() => file.current?.click()} />
+          <Card icon={<ArchiveRestore size={20} />} title="Restore backup" text="Open a .budgetreborn backup or a JSON export. Existing budgets are never overwritten." onClick={() => file.current?.click()} />
         </div>
-        <input ref={file} type="file" hidden accept=".budgetreborn,.sqlite,application/octet-stream" onChange={e => restore(e.target.files?.[0])} />
+        <input ref={file} type="file" hidden accept=".budgetreborn,.sqlite,.json,application/octet-stream,application/json" onChange={e => restore(e.target.files?.[0])} />
         {budgets.length > 0 && <div className="mt-8"><div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-ink-3">Your budgets</div>
           <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">{budgets.map(b => (
             <button key={b.id} onClick={() => onOpen(b.id)} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-sunken"><FolderOpen size={17} className="text-ink-3" /><span className="flex-1 truncate font-medium">{b.name}</span>

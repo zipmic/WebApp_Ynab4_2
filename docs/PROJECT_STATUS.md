@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1 (tool part), M3, M4 and I1. Test counts: 110 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1 (tool part), M3, M4, I1 and I3. Test counts: 112 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -20,6 +20,7 @@ Last updated after backlog items M1 (tool part), M3, M4 and I1. Test counts: 110
 | Atomic operations (failed step leaves nothing behind) | unit tests |
 | Schema upgrade v1→v2 with safety copy; failed upgrade leaves the database untouched; newer database refused | unit tests |
 | Backups, download, validated restore as a new budget, CSV/JSON export | unit + browser tests |
+| Restore from the JSON export as a new budget (validated row by row, one transaction, consistency check; newer/foreign/damaged files refused) (I3) | unit/API tests: identical round trip, 8 rejection cases |
 | Authentication: setup, Argon2id, TOTP, sessions, CSRF, throttling, HTTPS/VPN options, 401 on all private routes | unit tests |
 | Passkeys | browser test with a virtual authenticator (not with a physical device) |
 | Smart Bank Import: local OCR, CSV, JSON schema, suggestions, duplicate detection, atomic commit, learned corrections | unit tests + browser test with real OCR on synthetic screenshots |
@@ -50,7 +51,7 @@ Last updated after backlog items M1 (tool part), M3, M4 and I1. Test counts: 110
 
 ## Missing features (not started)
 Multi-month budget view · drag-and-drop reordering · configurable keyboard shortcuts · PIN lock · database encryption ·
-restore from the JSON export · offline writes · payee rename rules · entering scheduled transactions ahead of time ·
+offline writes · payee rename rules · entering scheduled transactions ahead of time ·
 payee management screen (merge/delete) · README for end users · deployment guide beyond the examples.
 
 ## Architectural risks

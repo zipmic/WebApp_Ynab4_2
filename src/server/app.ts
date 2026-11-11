@@ -212,6 +212,9 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
   app.post('/api/restore', { bodyLimit: 512 * 1024 * 1024 }, async req => {
     if (!Buffer.isBuffer(req.body)) throw bad('Send the backup file as application/octet-stream.');
     core.backupAll('before-restore');
+    // a .budgetreborn backup (SQLite file) or the open JSON export; both always become a new budget
+    const first = req.body.subarray(0, 64).toString('utf8').replace(/^\uFEFF/, '').trimStart();
+    if (first.startsWith('{')) return core.restoreJson(req.body.toString('utf8').replace(/^\uFEFF/, ''), (req.query as any).name);
     return core.restore(req.body, (req.query as any).name);
   });
 
