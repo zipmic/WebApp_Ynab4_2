@@ -68,9 +68,8 @@ Work top to bottom unless the owner says otherwise. Each task is small; finish, 
 - Run the wizard/API with the real Register + Budget CSV in a temp data dir; fix header/format mismatches; add synthetic regression tests for each.
 - Accept: preview status `verified`; account balances equal those of the native import.
 
-**M3. Show the migration audit in the wizard** 
-- After commit of a native import, call a new endpoint `POST /api/b/:bid/audit/ynab4` (body: the same files) that returns `auditNativeImport` output; render the area table on the "Done" step and in Settings → Migration report.
-- Accept: route is covered by the 401 route-table test automatically; browser test asserts the table shows "PASS" rows for the synthetic import.
+**M3. Show the migration audit in the wizard** — *done*
+- Implemented differently from the first plan, on purpose: instead of a second endpoint that receives the YNAB4 files again (≈20 MB for the owner's budget), `applyImport` takes an optional audit callback; the preview and commit routes pass `auditNativeImport` for native imports. The audit travels in `result.audit`, is stored with the import report (`imports.summary`), and is rendered by `src/web/components/AuditTable.tsx` on the verify and done steps and in Settings → Migration report. A FAIL verdict forces `needs_attention`. No new route.
 
 **M4. Budget name from zip folders with non-ASCII names**
 - In `src/web/lib/files.ts` decode zip entry names as UTF-8 when valid, else CP437 → fix garbled suggestion.
@@ -126,7 +125,7 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 ## 15. Exact next task
-If the owner has provided the YNAB4 export: finish **M1 step 5** (run `npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, report counts only, update the docs). Otherwise continue with **M3**.
+If the owner has provided the YNAB4 export: finish **M1 step 5** (run `npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, report counts only, update the docs). Otherwise continue with **M4**.
 
 Original M1 plan, for reference (steps 2–4 are done):
 1. Ask the owner for a YNAB4 export of the real budget (YNAB4 → File → Export → both files) and a path where it is stored outside the repository. If they cannot run YNAB4 any more, say so in `docs/PROJECT_STATUS.md`, skip to M3, and leave M1/M2 open.

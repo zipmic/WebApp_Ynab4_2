@@ -17,6 +17,7 @@ import { Core } from './core.ts';
 import { nowIso, openBudgetDb } from './db.ts';
 import { AppError, bad } from './errors.ts';
 import { applyImport } from './importService.ts';
+import { auditNativeImport } from './migrationAudit.ts';
 import { extractWithVision, sniffImage } from './vision.ts';
 import { IMPORT_CSV_EXAMPLE, IMPORT_JSON_EXAMPLE, parseBankCsv, parseBankText, parseImportJson, finalize, type Candidate } from '../shared/bankparse.ts';
 import { toCsv } from '../shared/csv.ts';
@@ -221,14 +222,14 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
       accounts: z.record(z.string(), z.object({ type: accountType.optional(), onBudget: z.boolean().optional(), closed: z.boolean().optional() })).optional() }).optional(),
     confirmDuplicate: z.boolean().optional(),
   });
-  const buildModel = (b: z.infer<typeof ynabBody>): { model: ImportModel; fingerprint: string; detected: { path: string; kind: string }[] } => {
+  const buildModel = (b: z.infer<typeof ynabBody>): { model: ImportModel; fingerprint: string; detected: { path: string; kind: string }[]; nativeFiles?: { path: string; text: string }[] } => {
     const detected: { path: string; kind: string }[] = []; let model: ImportModel;
     if (isYnab4Native(b.files)) {
       for (const f of b.files) detected.push({ path: f.path, kind: /\.yfull$/i.test(f.path) ? 'YNAB4 full budget (Budget.yfull)' : /\.ydiff$/i.test(f.path) ? 'YNAB4 sync diff' : /\.ydevice$/i.test(f.path) ? 'YNAB4 device info' : /\.ymeta$/i.test(f.path) ? 'YNAB4 budget metadata' : 'ignored' });
       const relevant = b.files.filter(f => /\.(yfull|ydiff|ydevice|ymeta)$/i.test(f.path));
       model = parseYnab4Native(relevant);
       if (b.options?.budgetName) model.budgetName = b.options.budgetName;
-      return { model, detected, fingerprint: Core.fingerprint(relevant.filter(f => /\.(yfull|ydiff)$/i.test(f.path)).map(f => f.text)) };
+      return { model, detected, nativeFiles: relevant, fingerprint: Core.fingerprint(relevant.filter(f => /\.(yfull|ydiff)$/i.test(f.path)).map(f => f.text)) };
     }
     let register: string | null = null, budget: string | null = null, name = b.options?.budgetName;
     for (const f of b.files) {
@@ -241,6 +242,8 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     model = parseYnab4Csv({ register, budget }, { dateStyle: b.options?.dateStyle, decimal: b.options?.decimal, budgetName: name, accounts: b.options?.accounts as any });
     return { model, detected, fingerprint: Core.fingerprint([register, budget ?? '']) };
   };
+  /** Native imports are additionally audited record by record against the raw files (src/server/migrationAudit.ts). */
+  const auditFor = (built: ReturnType<typeof buildModel>) => (built.nativeFiles ? (svc: BudgetService) => auditNativeImport(built.nativeFiles!, svc) : undefined);
   const summarize = (model: ImportModel) => ({
     budgetName: model.budgetName, currency: model.currency, kind: model.kind,
     accounts: model.accounts.map(a => ({ name: a.name, type: a.type, onBudget: a.onBudget, closed: a.closed, typeKnown: a.typeKnown, transactions: model.transactions.filter(t => t.accountSid === a.sid).length,
@@ -256,7 +259,7 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     let built; try { built = buildModel(b); } catch (e) { if (e instanceof AppError) throw e; throw new AppError(422, 'IMPORT_UNREADABLE', (e as Error).message); }
     // dry run in a throw-away in-memory database: the real audit, without touching anything on disk
     const mem = new BudgetService(openBudgetDb(':memory:'), 'preview');
-    try { const result = applyImport(mem, built.model, built.fingerprint); return { detected: built.detected, summary: summarize(built.model), result, previousImports: core.findImports(built.fingerprint) }; }
+    try { const result = applyImport(mem, built.model, built.fingerprint, auditFor(built)); return { detected: built.detected, summary: summarize(built.model), result, previousImports: core.findImports(built.fingerprint) }; }
     finally { mem.db.close(); }
   });
   app.post('/api/import/ynab4/commit', { bodyLimit: 512 * 1024 * 1024 }, async req => {
@@ -267,7 +270,7 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     if (previous.length && !b.confirmDuplicate) throw new AppError(409, 'ALREADY_IMPORTED', `These files were already imported as "${previous[0].name}".`, { previous });
     core.backupAll('before-import'); // existing budgets are never modified by an import, but keep a safety copy anyway
     const svc = core.createBudget(built.model.budgetName);
-    try { const result = applyImport(svc, built.model, built.fingerprint); core.renameBudget(svc.id, built.model.budgetName); return { budgetId: svc.id, result }; }
+    try { const result = applyImport(svc, built.model, built.fingerprint, auditFor(built)); core.renameBudget(svc.id, built.model.budgetName); return { budgetId: svc.id, result }; }
     catch (e) { core.discardBudget(svc.id); throw e; } // roll back completely: no half-imported budget is left behind
   });
 

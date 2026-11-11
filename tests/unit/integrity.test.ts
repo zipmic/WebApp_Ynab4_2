@@ -206,3 +206,28 @@ describe('comparison with YNAB4\'s own Budget export (M1)', () => {
     expect(() => compareWithBudgetCsv(memBudget(), '"Account","Date","Payee"\r\n')).toThrow(/not a YNAB4 Budget export/);
   });
 });
+
+describe('independent audit shown with every native import (M3)', () => {
+  it('preview and commit return the audit; it is stored with the import report; CSV imports have none', async () => {
+    const { app } = await testApp(); const h = await login(app);
+    const src = memBudget(); generateBudget(src, { startMonth: '2025-01', months: 6, txPerMonth: 15, seed: 4 });
+    const files = [{ path: 'Mit budget~1A2B3C4D.ynab4/Budget.yfull', text: JSON.stringify(toYfull(src)) }];
+    const p = (await app.inject({ method: 'POST', url: '/api/import/ynab4/preview', headers: h, payload: { files } })).json();
+    expect(p.result.audit.verdict).toBe('PASS'); expect(p.result.audit.areas.length).toBeGreaterThan(15); expect(p.result.status).toBe('verified');
+    const c = (await app.inject({ method: 'POST', url: '/api/import/ynab4/commit', headers: h, payload: { files } })).json();
+    expect(c.result.audit.verdict).toBe('PASS');
+    const boot = (await app.inject({ method: 'GET', url: `/api/b/${c.budgetId}/bootstrap`, headers: h })).json();
+    expect(JSON.parse(boot.lastImport).audit.verdict).toBe('PASS'); // what Settings → Migration report shows
+    const csv = exportYnab4Csv(src, { first: '2025-01', last: '2025-06' });
+    const pc = (await app.inject({ method: 'POST', url: '/api/import/ynab4/preview', headers: h, payload: { files: [{ path: 'x-Register.csv', text: csv.register }, { path: 'x-Budget.csv', text: csv.budget }] } })).json();
+    expect(pc.result.audit).toBeUndefined();
+    await app.close();
+  });
+  it('an import whose independent audit fails is never labelled verified', () => {
+    const src = memBudget(); generateBudget(src, { startMonth: '2025-01', months: 2, txPerMonth: 10 });
+    const r = applyImport(memBudget(), parseYnab4Native([{ path: 'Budget.yfull', text: JSON.stringify(toYfull(src)) }]), 'fp',
+      () => ({ verdict: 'FAIL', areas: [{ area: 'x', status: 'FAIL', source: 1, imported: 0, detail: 'd', examples: [] }], skipped: [], unrecognizedFields: {} }));
+    expect(r.checks.filter(c => c.status === 'fail')).toEqual([]); // the importer's own checks all pass…
+    expect(r.status).toBe('needs_attention'); expect(r.ok).toBe(false); // …but the audit's FAIL decides
+  });
+});

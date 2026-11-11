@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog item M1 (tool part). Test counts: 106 unit/integration tests, 17 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1 (tool part) and M3. Test counts: 108 unit/integration tests, 18 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -12,6 +12,7 @@ Last updated after backlog item M1 (tool part). Test counts: 106 unit/integratio
 | Scheduled transactions (entered when due) | unit tests |
 | **Native YNAB4 import** | real budget: every financial area PASS; synthetic regression tests |
 | Independent migration audit + CLI (`npm run audit:ynab4`) | unit tests incl. deliberate damage detection; real budget |
+| Independent audit shown in the import wizard (verify + done steps) and Settings → Migration report; a FAIL verdict prevents the "verified" label (M3) | unit tests + browser step with a synthetic native budget |
 | Comparison of an import with YNAB4's own Budget export (`--budget-csv`, M1) | 8 synthetic tests (faithful import passes; wrong cell, unknown category, unreadable row, missing row detected; hidden categories and both Outflows sign conventions); **not yet run on the owner's real export** |
 | Import safety: preview without writing, new budget only, rollback on failure, duplicate-import guard | unit/API tests; real zip through the API |
 | Concurrent-edit detection (revision, 409 STALE) | unit + API tests incl. simultaneous requests |

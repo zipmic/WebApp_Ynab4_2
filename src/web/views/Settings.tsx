@@ -8,6 +8,7 @@ import { Badge, Button, Combobox, Confirm, cx, Dialog, Field, Input, Select } fr
 import { api, del, get, post, put, setCsrf } from '../lib/api';
 import { applyTheme, currentTheme, download, go, toast, toastError, useBudget, type Theme } from '../lib/store';
 import { useCategoryOptions } from './TxnEditor';
+import { AuditTable } from '../components/AuditTable';
 
 const TABS = [['budget', 'Budget'], ['security', 'Security'], ['backups', 'Backups & export'], ['rules', 'Import rules'], ['app', 'Appearance & shortcuts']] as const;
 export default function Settings({ status, budgets, onSwitch }: { status: Status; budgets: BudgetInfo[]; onSwitch: (id: string | null, path?: string) => void }) {
@@ -38,6 +39,7 @@ function BudgetTab({ budgets, onSwitch }: { budgets: BudgetInfo[]; onSwitch: (id
     {last && <Card title="Migration report" desc={`This budget was imported from ${last.kind === 'ynab4-native' ? 'a native YNAB4 budget' : 'YNAB4 CSV exports'}.`}>
       <div className="mb-2"><Badge tone={last.status === 'verified' ? 'pos' : 'warn'}>{last.status === 'verified' ? 'Verified against source' : 'Needs attention'}</Badge></div>
       <ul className="space-y-1 text-[13px]">{last.checks.map((c: any) => <li key={c.name} className={cx(c.status === 'fail' && 'text-neg')}><b className="font-medium">{c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '·'} {c.name}:</b> <span className="text-ink-2">{c.detail}</span></li>)}</ul></Card>}
+    {last?.audit && <AuditTable audit={last.audit} />}
     <Card title="Budgets" desc="Each budget is a separate file on your server.">
       <ul className="divide-y divide-line rounded-xl border border-line">{budgets.map(x => <li key={x.id} className="flex items-center gap-3 px-3 py-2"><span className="flex-1 truncate font-medium">{x.name}</span>{x.id === b.bid ? <Badge tone="accent">Open</Badge> : <Button size="sm" onClick={() => onSwitch(x.id)}>Open</Button>}</li>)}</ul>
       <div className="mt-3 flex flex-wrap gap-2"><Button onClick={() => go('welcome')}><Plus size={15} />New, import or restore…</Button><Button className="text-neg" onClick={() => { setConfirmName(''); setDelOpen(true); }}><Trash2 size={15} />Delete this budget…</Button></div></Card>

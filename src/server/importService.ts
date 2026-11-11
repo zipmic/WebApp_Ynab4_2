@@ -4,6 +4,7 @@
  */
 import { newId, nowIso } from './db.ts';
 import type { BudgetService } from './budgetService.ts';
+import type { MigrationAudit } from './migrationAudit.ts';
 import { normalizePayee } from '../shared/matching.ts';
 import type { ImportModel, ImportWarning } from '../shared/importModel.ts';
 import { monthOf, todayISO } from '../shared/dates.ts';
@@ -14,9 +15,15 @@ export interface ImportResult {
   counts: { accounts: number; groups: number; categories: number; payees: number; transactions: number; splitLines: number; transferPairs: number; budgetCells: number; budgetMonths: number; scheduled: number };
   range: { firstTransaction: string | null; lastTransaction: string | null; firstBudgetMonth: string | null; lastBudgetMonth: string | null };
   checks: AuditCheck[]; warnings: ImportWarning[]; coverage: ImportModel['coverage']; kind: ImportModel['kind']; openMonth: string;
+  /** independent record-by-record audit against the raw source (native YNAB4 imports only) */
+  audit?: MigrationAudit;
 }
 
-export function applyImport(svc: BudgetService, model: ImportModel, fingerprint: string): ImportResult {
+/**
+ * `audit`, when given, runs after the import against the raw source; a FAIL verdict means the import is never
+ * labelled verified. Its result is stored with the import report so Settings can show it later.
+ */
+export function applyImport(svc: BudgetService, model: ImportModel, fingerprint: string, audit?: (svc: BudgetService) => MigrationAudit): ImportResult {
   const warnings = [...model.warnings];
   const maps = svc.bulk(() => {
     const db = svc.db;
@@ -155,7 +162,7 @@ export function applyImport(svc: BudgetService, model: ImportModel, fingerprint:
         detail: bad ? `${bad} of ${exp.length} category-month values differ from the Budget export, in ${badMonths.size} of ${months.size} month(s). First affected month: ${[...badMonths].sort()[0]}.`
           : `All ${exp.length} category-month values across ${months.size} month(s) (${sorted[0]} – ${sorted[sorted.length - 1]}) match the Budget export exactly.` });
       checks.push({ name: `Most recent months (${recent.join(', ')})`, status: recentBad.length ? 'fail' : 'pass', detail: recentBad.length ? `Differences remain in ${recentBad.join(', ')}.` : 'Budgeted, activity and balances match for every category.' });
-    } else checks.push({ name: 'Monthly budget values', status: 'skipped', detail: model.kind === 'ynab4-native' ? 'The native file stores budgeted amounts (imported exactly) but not computed balances, so there is nothing to compare month by month. Compare a recent month against YNAB4 on screen.' : 'No Budget export was provided.' });
+    } else checks.push({ name: 'Monthly budget values', status: 'skipped', detail: model.kind === 'ynab4-native' ? 'The native file stores budgeted amounts (imported exactly) but not YNAB4\'s computed balances. The independent audit recalculates every month separately; to compare with YNAB4\'s own figures, run npm run audit:ynab4 with --budget-csv and a Budget export from YNAB4.' : 'No Budget export was provided.' });
   }
   if (model.expected.categoryBalances.length) {
     const cur = new Map(svc.getBudget(monthOf(todayISO())).rows.map(r => [r.categoryId, r.available])); let diff = 0;
@@ -169,12 +176,14 @@ export function applyImport(svc: BudgetService, model: ImportModel, fingerprint:
   if (uncategorized) checks.push({ name: 'Uncategorised budget transactions', status: 'info', detail: `${uncategorized} transaction(s) in budget accounts have no category. As in YNAB4 they change account balances but are invisible to the budget until categorised.` });
 
   const range = one('SELECT MIN(date) a, MAX(date) b FROM transactions'); const brange = one('SELECT MIN(month) a, MAX(month) b, COUNT(DISTINCT month) n FROM monthly_budgets WHERE budgeted<>0');
-  const failed = checks.some(c => c.status === 'fail') || warnings.some(w => w.level === 'error');
+  const independent = audit ? audit(svc) : undefined;
+  const failed = checks.some(c => c.status === 'fail') || warnings.some(w => w.level === 'error') || independent?.verdict === 'FAIL';
   const result: ImportResult = {
     ok: !failed, status: failed ? 'needs_attention' : 'verified', kind: model.kind, checks, warnings, coverage: model.coverage, openMonth: monthOf(todayISO()),
     counts: { accounts: accounts.length, groups: model.groups.length, categories: catCount, payees: one('SELECT COUNT(*) n FROM payees').n, transactions: txCount, splitLines: maps.counts.splitLines,
       transferPairs: maps.counts.pairs, budgetCells: maps.counts.cells, budgetMonths: brange.n ?? 0, scheduled: model.scheduled.length },
     range: { firstTransaction: range.a, lastTransaction: range.b, firstBudgetMonth: brange.a, lastBudgetMonth: brange.b },
+    ...(independent ? { audit: independent } : {}),
   };
   db.prepare('INSERT INTO imports(id,kind,fingerprint,at,summary) VALUES(?,?,?,?,?)').run(newId(), model.kind, fingerprint, nowIso(), JSON.stringify(result));
   return result;

@@ -115,6 +115,7 @@ only. Code: `readYnab4BudgetCsv` (`src/shared/ynab4csv.ts`), `compareWithBudgetC
 - Commit creates a **new** budget file; on any error the file is deleted. Existing budgets are backed up first and never modified.
 - Fingerprint (SHA-256 of the yfull/ydiff or CSV contents) is stored; importing the same files again needs explicit confirmation.
 - The first audit (`importService.ts`) refuses the label "verified" if any check fails or any source row was unreadable.
+- Native imports also run the independent audit (`migrationAudit.ts`) in preview and commit; the wizard and Settings → Migration report show it, and a FAIL verdict also prevents "verified".
 
 ## CSV route (unvalidated against real exports)
 Header-driven; expects Register columns `Account, Flag, Check Number, Date, Payee, Category, Master Category, Sub Category,

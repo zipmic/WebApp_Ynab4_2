@@ -7,10 +7,11 @@ import { toastError } from '../lib/store';
 import { formatMinor, DKK_FORMAT } from '../../shared/money';
 import { ACCOUNT_TYPES } from '../../shared/types';
 import { Logo } from './Auth';
+import { AuditTable, type MigrationAudit } from '../components/AuditTable';
 
 interface Check { name: string; status: 'pass' | 'fail' | 'info' | 'skipped'; detail: string; mismatches?: { where: string; expected: string; actual: string; hint?: string }[]; mismatchCount?: number }
 interface Result { ok: boolean; status: 'verified' | 'needs_attention'; kind: string; counts: Record<string, number>; range: Record<string, string | null>; checks: Check[];
-  warnings: { level: 'info' | 'warning' | 'error'; code: string; message: string }[]; coverage: { item: string; status: 'full' | 'partial' | 'none'; note: string }[] }
+  warnings: { level: 'info' | 'warning' | 'error'; code: string; message: string }[]; coverage: { item: string; status: 'full' | 'partial' | 'none'; note: string }[]; audit?: MigrationAudit }
 interface Preview { detected: { path: string; kind: string }[]; result: Result; previousImports: { id: string; name: string; at: string }[];
   summary: { budgetName: string; currency: string | null; kind: string; accounts: { name: string; type: string; onBudget: boolean; closed: boolean; typeKnown: boolean; transactions: number; balance: number }[];
     groups: { name: string; hidden: boolean; categories: { name: string; hidden: boolean }[] }[]; sample: { date: string; account: string; payee: string; category: string; amount: number; cleared: string }[]; budgetMonths: string[]; scheduled: number } }
@@ -100,6 +101,7 @@ export default function Ynab4Import({ onOpen, onCancel }: { onOpen: (id: string)
       {step === 2 && <>
         <Warnings list={r.warnings} />
         <Checks result={r} />
+        {r.audit && <AuditTable audit={r.audit} />}
         {preview.previousImports.length > 0 && <label className="flex items-start gap-2.5 rounded-xl border border-warn bg-warn-soft px-4 py-3 text-warn"><input type="checkbox" className="mt-1" checked={confirmDup} onChange={e => setConfirmDup(e.target.checked)} />
           <span>These exact files were already imported as <b>“{preview.previousImports[0].name}”</b> on {preview.previousImports[0].at.slice(0, 10)}. Tick to import them again as a second, separate budget.</span></label>}
         <div className="flex flex-wrap items-center justify-between gap-3"><Button onClick={() => setStep(1)}><ArrowLeft size={15} />Back</Button>
@@ -113,7 +115,7 @@ export default function Ynab4Import({ onOpen, onCancel }: { onOpen: (id: string)
         <div><h2 className="text-[16px] font-semibold">{done.result.status === 'verified' ? 'Migration complete and verified' : 'Imported — some points need your attention'}</h2>
           <p className="text-[13.5px] text-ink-2">{done.result.counts.transactions.toLocaleString()} transactions in {done.result.counts.accounts} accounts, {done.result.counts.categories} categories and {done.result.counts.budgetMonths} months of budget history were imported.
             {done.result.status === 'verified' ? ' Every comparison against your source files matched.' : ' The import is saved, but it is not declared verified: review the failed checks below before relying on the numbers.'}</p></div></div>
-      <Checks result={done.result} /><Warnings list={done.result.warnings} /><Coverage list={done.result.coverage} />
+      <Checks result={done.result} />{done.result.audit && <AuditTable audit={done.result.audit} />}<Warnings list={done.result.warnings} /><Coverage list={done.result.coverage} />
       <div className="flex justify-end"><Button variant="primary" size="lg" onClick={() => onOpen(done.budgetId)}>Open my budget</Button></div></div>}
   </div>;
 }

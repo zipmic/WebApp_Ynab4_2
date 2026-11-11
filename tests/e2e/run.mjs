@@ -4,7 +4,7 @@
  * Smart Bank Import with real local OCR, reconciliation, backup and the phone layout.
  * Screenshots are written to tests/e2e/screenshots.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -181,6 +181,22 @@ await step('sign out, wrong password is refused, sign in again', async () => {
   await page.getByText('Sign in to your budget').waitFor(); const r = await page.request.get(BASE + '/api/budgets'); expect(r.status() === 401, 'API reachable after sign-out');
   await page.getByLabel('Username').fill('owner'); await page.getByLabel('Password').fill('wrong-password-1'); await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await page.getByText('Wrong username or password.').waitFor(); await shot('16-login');
   await page.getByLabel('Password').fill('a-very-long-e2e-password'); await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await page.getByRole('tab', { name: 'Security' }).waitFor(); await page.evaluate(() => { location.hash = '#/budget'; }); await page.locator('[data-testid=atb]').waitFor();
+});
+await step('native YNAB4 import shows the independent audit in the wizard and in Settings', async () => {
+  const dir = join(dataDir, 'Native E2E~1A2B3C4D.ynab4'); mkdirSync(dir, { recursive: true }); const yfull = join(dir, 'Budget.yfull');
+  execFileSync('npx', ['tsx', 'tests/e2e/make-yfull.ts', yfull], { stdio: 'pipe' });
+  await page.evaluate(() => { location.hash = '#/ynab4-import'; }); await page.getByText('Drop your YNAB4 budget here').waitFor();
+  await page.locator('input[type=file]').nth(1).setInputFiles(yfull); await page.getByText('YNAB4 full budget (Budget.yfull)').waitFor();
+  await page.getByRole('button', { name: 'Continue to verification' }).click();
+  const audit = page.locator('[data-testid=migration-audit]'); await audit.waitFor();
+  const rows = async () => ({ pass: await audit.locator('tr[data-status=PASS]').count(), fail: await audit.locator('tr[data-status=FAIL]').count() });
+  let r = await rows(); expect(r.pass >= 15 && r.fail === 0, `audit on verify step: ${JSON.stringify(r)}`);
+  expect((await audit.innerText()).includes('PASS'), 'verdict PASS not shown'); await audit.screenshot({ path: `${shots}/23-ynab4-native-audit.png` });
+  await page.getByRole('button', { name: /Import [\d,.]+ transactions/ }).click(); await page.getByText('Migration complete and verified').waitFor();
+  r = await rows(); expect(r.pass >= 15 && r.fail === 0, `audit on done step: ${JSON.stringify(r)}`);
+  await page.getByRole('button', { name: 'Open my budget' }).click(); await page.locator('[data-testid=atb]').waitFor();
+  await page.evaluate(() => { location.hash = '#/settings'; }); await audit.waitFor();
+  r = await rows(); expect(r.pass >= 15 && r.fail === 0, `audit in Settings: ${JSON.stringify(r)}`);
 });
 await step('phone layout: bottom navigation, account switching, budget sheet and fast transaction entry', async () => {
   const state = await ctx.storageState(); const m = await browser.newContext({ ...devices['iPhone 13'], storageState: state, locale: 'da-DK' }); page = await m.newPage(); page.on('pageerror', e => errors.push(e.message));
