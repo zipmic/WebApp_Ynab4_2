@@ -1,0 +1,9 @@
+# For hosts that run Node.js apps behind Apache (e.g. cPanel "Setup Node.js App" / Passenger).
+# Force HTTPS and never serve private files should they ever end up in the web root by mistake.
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=308]
+<FilesMatch "\.(sqlite|sqlite-wal|sqlite-shm|env|budgetreborn|log|txt)$">
+  Require all denied
+</FilesMatch>
+Options -Indexes

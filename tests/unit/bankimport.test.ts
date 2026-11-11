@@ -73,6 +73,9 @@ describe('reading bank screenshots (OCR text → candidates)', () => {
     const unsigned = parse('08.11.2026 NETTO 428,50\n07.11.2026 SPAR 212,95');
     expect(unsigned.every(x => x.issues.includes('sign_ambiguous') && needsReview(x))).toBe(true);
     expect(parse('08.11.2026 NETTO 428,50-')[0].amount).toBe(-42850); // trailing minus
+    // the bank marks inflows with "+": an amount with no sign probably lost its minus in OCR → blocked
+    const lost = parse('08.11.2026 NETTO -428,50\n07.11.2026 SPAR 212,95\n01.11.2026 LØN +32.500,00');
+    expect(lost[1].issues).toContain('sign_ambiguous'); expect(needsReview(lost[1])).toBe(true); expect(needsReview(lost[2])).toBe(false);
   });
   it('flags low OCR confidence, future dates, huge and zero amounts', () => {
     expect(parseBankText(text('08.11.2026 NETTO -428,50', 55), { today: TODAY })[0].issues).toContain('low_ocr_confidence');

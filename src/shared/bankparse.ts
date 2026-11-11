@@ -48,7 +48,7 @@ const INT_AMOUNT_END = new RegExp(`(?:^|\\s)([+\\-]\\s?)?(\\d{1,3}(?:[. ]\\d{3})
 const DATE_PREFIX = /^(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{4}|\d{2}))?|\d{4}-\d{2}-\d{2}|\d{1,2}\.?\s+[a-zæøå]{3,9}\.?(?:\s+\d{4})?)(?=\s|$)\.?\s*/i;
 const RELATIVE: Record<string, number> = { 'i dag': 0, 'idag': 0, 'today': 0, 'i går': -1, 'igår': -1, 'i gar': -1, 'yesterday': -1, 'i forgårs': -2 };
 
-interface Tok { value: number; signed: boolean; start: number; end: number; ambiguous: boolean }
+interface Tok { value: number; signed: boolean; plus: boolean; start: number; end: number; ambiguous: boolean }
 function findAmounts(line: string, decimal: DecimalStyle): Tok[] {
   const out: Tok[] = []; AMOUNT_RE.lastIndex = 0; let m: RegExpExecArray | null;
   while ((m = AMOUNT_RE.exec(line))) {
@@ -56,7 +56,7 @@ function findAmounts(line: string, decimal: DecimalStyle): Tok[] {
     const neg = !!(m[1]?.includes('-')) !== !!m[3];
     const p = parseAmount(m[2].replace(/ /g, ''), decimal);
     if (!p) continue;
-    out.push({ value: neg ? -p.minor : p.minor, signed: !!m[1] || !!m[3], start: m.index, end: m.index + m[0].length, ambiguous: p.ambiguous });
+    out.push({ value: neg ? -p.minor : p.minor, signed: !!m[1] || !!m[3], plus: !!m[1]?.includes('+'), start: m.index, end: m.index + m[0].length, ambiguous: p.ambiguous });
   }
   return out;
 }
@@ -135,6 +135,7 @@ export function parseBankText(lines: OcrLine[], opts: ParseOptions = {}): Candid
       c.amount = main.value;
       if (main.ambiguous) c.issues.push('amount_ambiguous');
       if (!main.signed) c.issues.push('sign_assumed'); // refined after the whole batch is known
+      if (main.plus) (c as any)._plus = true;
       if (amts.length >= 2) { c.balanceAfter = amts[amts.length - 1].value; if (amts.length > 2) c.issues.push('multiple_amounts'); }
       const cur = new RegExp(CUR, 'i').exec(text.slice(amts[0].start > 6 ? amts[0].start - 6 : 0)); if (cur) c.currency = normCurrency(cur[0]);
       out.push(c); lastRowLine = idx; pendingText = null; sawRowBeforeDate ||= !rowDate && !headerDate;
@@ -175,6 +176,8 @@ export function finalize(cands: Candidate[], today: ISODate = todayISO(), budget
   const bySource = new Map<number, Candidate[]>();
   for (const c of cands) (bySource.get(c.sourceIndex) ?? bySource.set(c.sourceIndex, []).get(c.sourceIndex)!).push(c);
   for (const list of bySource.values()) {
+    // If this source writes an explicit "+" on inflows, an amount with no sign at all most likely lost its minus in reading.
+    if (list.some(c => (c as any)._plus)) for (const c of list) if (c.issues.includes('sign_assumed')) { c.issues = c.issues.filter(x => x !== 'sign_assumed'); c.issues.push('sign_ambiguous'); }
     // Running balance check. Lists are newest-first (bal[i] - amt[i] = bal[i+1]) or oldest-first (bal[i] + amt[i+1] = bal[i+1]).
     const withBal = list.filter(c => c.balanceAfter !== null && c.amount !== null);
     if (withBal.length >= 2) {
@@ -208,7 +211,7 @@ export function finalize(cands: Candidate[], today: ISODate = todayISO(), budget
     if (c.date && c.date > addDays(today, 1)) c.issues.push('future_date');
     if (c.date && c.date < addDays(today, -731)) c.issues.push('old_date');
     if (budgetCurrency && c.currency && c.currency !== budgetCurrency) c.issues.push('currency_mismatch');
-    delete (c as any)._verified;
+    delete (c as any)._verified; delete (c as any)._plus;
     c.issues = [...new Set(c.issues)];
     const penalty = c.issues.reduce((p, i) => p + (BLOCKING.has(i) ? 0.35 : 0.08), 0);
     c.confidence = Math.max(0.05, Math.round(Math.min(c.confidence, 0.97) * (1 - Math.min(0.9, penalty)) * 100) / 100);
@@ -323,3 +326,21 @@ export function parseImportJson(text: string, opts: ParseOptions = {}): { candid
   return { candidates: finalize(cands, opts.today, opts.currency), account: typeof doc.account === 'string' ? doc.account : null, errors: [] };
 }
 export { monthFromName };
+
+// ------------------------------------------------------------------------------------------- OCR geometry
+export interface OcrWord { text: string; confidence: number; x0: number; y0: number; x1: number; y1: number }
+/**
+ * Rebuild visual rows from word boxes. OCR engines often split a transaction row into a left block
+ * (payee) and a right block (amount); grouping words by vertical position puts them back together.
+ */
+export function wordsToLines(words: OcrWord[]): OcrLine[] {
+  const ws = words.filter(w => w.text.trim()).sort((a, b) => (a.y0 + a.y1) - (b.y0 + b.y1));
+  const rows: OcrWord[][] = [];
+  for (const w of ws) {
+    const cy = (w.y0 + w.y1) / 2, h = w.y1 - w.y0;
+    const row = rows[rows.length - 1];
+    if (row) { const ry = row.reduce((s, x) => s + (x.y0 + x.y1) / 2, 0) / row.length, rh = Math.max(...row.map(x => x.y1 - x.y0)); if (Math.abs(cy - ry) < Math.max(rh, h) * 0.5) { row.push(w); continue; } }
+    rows.push([w]);
+  }
+  return rows.map(r => { r.sort((a, b) => a.x0 - b.x0); return { text: r.map(w => w.text).join(' '), confidence: Math.min(...r.map(w => w.confidence)) }; });
+}

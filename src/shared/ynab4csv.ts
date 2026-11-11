@@ -122,13 +122,23 @@ export function parseYnab4Csv(input: { register: string; budget?: string | null 
   model.expected.transactionCount = parsed.length;
 
   // ---- accounts (type is not in the CSV; on/off-budget is inferred from category usage)
-  const catUse = new Map<string, number>();
-  for (const p of parsed) if (p.cat) catUse.set(p.account, (catUse.get(p.account) ?? 0) + 1);
+  // An account is a budget account if any of its rows carries a category, or if it exchanges
+  // uncategorised transfers with a budget account (YNAB4 requires a category on transfers to tracking accounts).
+  const budgetLike = new Set<string>();
+  for (const p of parsed) if (p.cat) budgetLike.add(p.account);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const p of parsed) {
+      const tm = TRANSFER_RE.exec(p.payee); const other = tm?.[1].trim();
+      if (!other || p.cat || !accountOrder.includes(other)) continue;
+      if (budgetLike.has(p.account) && !budgetLike.has(other)) { budgetLike.add(other); changed = true; }
+    }
+  }
   for (const name of accountOrder) { const o = opts.accounts?.[name];
-    model.accounts.push({ sid: 'a:' + name, name, type: o?.type ?? 'checking', onBudget: o?.onBudget ?? (catUse.get(name) ?? 0) > 0, closed: o?.closed ?? false, note: '', typeKnown: !!o?.type }); }
+    model.accounts.push({ sid: 'a:' + name, name, type: o?.type ?? 'checking', onBudget: o?.onBudget ?? budgetLike.has(name), closed: o?.closed ?? false, note: '', typeKnown: !!o?.type }); }
   const accSid = new Map(model.accounts.map(a => [a.name, a.sid]));
   const onBudget = new Map(model.accounts.map(a => [a.sid, a.onBudget]));
-  warnings.push({ level: 'warning', code: 'account_types_inferred', message: 'CSV exports do not contain account types or the budget/off-budget setting. Accounts whose transactions have no categories were assumed to be off-budget; all are typed "Checking". Review them in the preview.' });
+  warnings.push({ level: 'warning', code: 'account_types_inferred', message: 'CSV exports do not contain account types or the budget/off-budget setting. Accounts with no categorised transactions and no uncategorised transfers to budget accounts were assumed to be off-budget; all are typed "Checking". Review them in the preview.' });
 
   // ---- assemble splits
   const payeeSet = new Map<string, string | null>();

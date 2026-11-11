@@ -411,7 +411,7 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
   // ================================================================= static frontend (only dist/web is ever served)
   if (existsSync(cfg.webDir)) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false, index: ['index.html'],
-      setHeaders: (res: any, path: string) => { res.setHeader('Cache-Control', /[\\/]assets[\\/]/.test(path) || /[\\/]ocr[\\/]/.test(path) ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
+      setHeaders: (res: any, path: string) => { (res.setHeader ? res.setHeader.bind(res) : res.header.bind(res))('Cache-Control', /[\\/]assets[\\/]/.test(path) || /[\\/]ocr[\\/]/.test(path) ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
   }
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith('/api/') || !existsSync(cfg.webDir) || req.method !== 'GET' || /\.[a-z0-9]{2,5}$/i.test(req.url.split('?')[0])) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Not found' } });

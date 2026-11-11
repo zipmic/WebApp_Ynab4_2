@@ -1,0 +1,21 @@
+# systemd unit — copy to /etc/systemd/system/, adjust paths, then: systemctl enable --now budget-reborn
+[Unit]
+Description=Budget Reborn
+After=network.target
+
+[Service]
+User=budget
+WorkingDirectory=/opt/budget-reborn
+EnvironmentFile=/etc/budget-reborn.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/server/index.mjs
+Restart=on-failure
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/budget-reborn
+
+[Install]
+WantedBy=multi-user.target

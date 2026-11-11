@@ -8,6 +8,6 @@ mkdirSync(join(out, 'core'), { recursive: true });
 mkdirSync(join(out, 'lang'), { recursive: true });
 cpSync(join(nm, 'tesseract.js/dist/worker.min.js'), join(out, 'worker.min.js'));
 for (const f of readdirSync(join(nm, 'tesseract.js-core')))
-  if (/^tesseract-core.*\.(js|wasm)$/.test(f)) cpSync(join(nm, 'tesseract.js-core', f), join(out, 'core', f));
+  if (/^tesseract-core.*-lstm\.wasm\.js$/.test(f)) cpSync(join(nm, 'tesseract.js-core', f), join(out, 'core', f));
 for (const l of ['dan', 'eng'])
   cpSync(join(nm, `@tesseract.js-data/${l}/4.0.0_best_int/${l}.traineddata.gz`), join(out, 'lang', `${l}.traineddata.gz`));
