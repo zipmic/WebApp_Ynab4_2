@@ -8,7 +8,7 @@ Code: `src/shared/ynab4native.ts` (native reader), `src/shared/ynab4csv.ts` (CSV
 | Source | Status |
 |---|---|
 | Native `.ynab4` folder / zip | **Validated on the owner's real budget**: overall PARTIAL, with every financial area PASS (details below) |
-| YNAB4 CSV export (Register + Budget) | Works on synthetic exports written from memory of the format; **not validated against a real export** |
+| YNAB4 CSV export (Register + Budget) | **Validated on the owner's real export**: all 7,208 transactions identical field by field to the native import; balances, transfers, splits and every month figure identical |
 
 ## Native format — as OBSERVED in a real budget (YNAB 4.3.843, data version 4.2)
 ```
@@ -124,12 +124,24 @@ row with an empty Sub Category and zero values; such rows are accepted only whil
 - The first audit (`importService.ts`) refuses the label "verified" if any check fails or any source row was unreadable.
 - Native imports also run the independent audit (`migrationAudit.ts`) in preview and commit; the wizard and Settings → Migration report show it, and a FAIL verdict also prevents "verified".
 
-## CSV route (unvalidated against real exports)
+## CSV route (validated against the owner's real export)
 Header-driven; expects Register columns `Account, Flag, Check Number, Date, Payee, Category, Master Category, Sub Category,
 Memo, Outflow, Inflow, Cleared, Running Balance` and Budget columns `Month, Category, Master Category, Sub Category, Budgeted,
 Outflows, Category Balance`. Transfers are re-paired by account/date/amount, splits re-assembled from `(Split n/m)` memos,
 budget/tracking inferred (overridable in the wizard), red-arrow settings inferred from how negative balances continue.
 Every category-month is compared with the Budget export.
+
+Real-export result (CSV import compared with the native import of the same budget, counts only): 13 of 13 accounts
+classified correctly as budget/tracking without help; balances, cleared balances and transaction counts equal for all
+13; all 7,208 transactions identical in account, date, amount, payee, category/splits, cleared state, flag and memo;
+826 transfer rows linked, 17 splits / 52 lines, 310 categories (224 hidden); budgeted, activity and available identical
+in every compared category-month and Available to Budget identical in all 153 months.
+Expected differences: the CSV route creates more groups (hidden categories are shown under their group name *at the
+time of hiding*, because the export contains only that name), stores fewer explicit red-arrow settings (inferred only
+where a balance needs it — every resulting balance is identical), and imports only payees that occur in transactions.
+Three reader bugs found with the real export and fixed with synthetic tests: hidden-category names ending in a group
+id were split at the wrong backtick; empty-group rows became a fake category; one uncategorised transfer to a tracking
+account made it look like a budget account.
 
 ## Remaining risks
 1. `.ydiff` merging is exercised by synthetic tests and by an ordering check on real diffs, but no real budget needing a merge has been imported.

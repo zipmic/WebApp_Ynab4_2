@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1, M3, M4, I1, I3, D2 and D3. Test counts: 116 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1, M2, M3, M4, I1, I3, D2 and D3. Test counts: 119 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -11,6 +11,7 @@ Last updated after backlog items M1, M3, M4, I1, I3, D2 and D3. Test counts: 116
 | Undo/redo (persistent) | unit + browser tests |
 | Scheduled transactions (entered when due) | unit tests |
 | **Native YNAB4 import** | real budget: every financial area PASS; synthetic regression tests |
+| **YNAB4 CSV import** (M2) | owner's real Register + Budget export: identical to the native import field by field and month by month; synthetic regression tests |
 | Independent migration audit + CLI (`npm run audit:ynab4`) | unit tests incl. deliberate damage detection; real budget |
 | Readable budget names from zips made without the UTF-8 name flag (macOS), e.g. folder names with Æ/Ø/Å (M4) | unit tests; checked on the owner's real zip (booleans only) |
 | Independent audit shown in the import wizard (verify + done steps) and Settings → Migration report; a FAIL verdict prevents the "verified" label (M3) | unit tests + browser step with a synthetic native budget |
@@ -31,7 +32,6 @@ Last updated after backlog items M1, M3, M4, I1, I3, D2 and D3. Test counts: 116
 ## Implemented but not verified
 | Item | What is missing |
 |---|---|
-| YNAB4 **CSV** import | never run against a real YNAB4 export (headers/formatting from memory) |
 | `.ydiff` merging when the full copy is behind | only synthetic tests; the real budget needed no merge |
 | Account types / frequencies not present in the real budget | mapping from documentation only |
 | Uncategorised-transaction rule, reconciliation-adjustment category | assumed YNAB4 behaviour |

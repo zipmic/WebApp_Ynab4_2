@@ -64,9 +64,7 @@ Work top to bottom unless the owner says otherwise. Each task is small; finish, 
 - Accept: a new audit area "Month values vs. YNAB4 export" with PASS/FAIL, counts and (ids/names only in a `--json` file outside the repo); synthetic test using `exportYnab4Csv` from `tests/unit/ynab4.test.ts` (move it to `tests/fixtures`); one deliberately wrong cell is detected.
 - If the real comparison shows differences: stop and report to the owner with the affected months and categories before changing `engine.ts`.
 
-**M2. Validate the CSV importer against the same real export** *(depends on M1's files)*
-- Run the wizard/API with the real Register + Budget CSV in a temp data dir; fix header/format mismatches; add synthetic regression tests for each.
-- Accept: preview status `verified`; account balances equal those of the native import.
+**M2. Validate the CSV importer against the same real export** — *done*: identical to the native import (see DATA_MIGRATION.md, CSV route); three reader bugs fixed with tests.
 
 **M3. Show the migration audit in the wizard** — *done*
 - Implemented differently from the first plan, on purpose: instead of a second endpoint that receives the YNAB4 files again (≈20 MB for the owner's budget), `applyImport` takes an optional audit callback; the preview and commit routes pass `auditNativeImport` for native imports. The audit travels in `result.audit`, is stored with the import report (`imports.summary`), and is rendered by `src/web/components/AuditTable.tsx` on the verify and done steps and in Settings → Migration report. A FAIL verdict forces `needs_attention`. No new route.
@@ -123,9 +121,13 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 ## 15. Exact next task
-**M2**: validate the CSV importer against the owner's real Register.csv + Budget.csv (structure observed: see DATA_MIGRATION.md).
-Run them through the import preview in a temporary data directory, compare account balances and the audit with the native
-import, fix mismatches with synthetic regression tests, report counts only. Owner's answers so far: hosting = the
-owner's own web space, where other npm/Node apps have worked (D1: ask for its control-panel type when writing the
-guide); I2 = no opinion from the owner (leave it, it is low priority for a single user); the earlier test-name slip in
-Git history = owner says leave it.
+**D1 — deployment guide for the owner's host.** The owner wants to use their own web space ("other npm apps worked
+there"). The earlier probe (`deploy/hostcheck.php`) found no Node.js visible from PHP, which is common when Node apps are
+run through a control-panel feature. Ask the owner: (a) the control panel or hosting provider name, (b) how the other
+npm apps were started there (panel "Node.js app"/Passenger, SSH + pm2, …), (c) whether they have SSH access and can
+create a folder outside the public web root. Then write `docs/DEPLOYMENT_GUIDE.md` for exactly that setup (install,
+env file with BR_DATA_DIR outside the web root, HTTPS, first-run setup token, `node dist/server/backup-now.mjs` on a
+schedule, updates) and update README "Running it for real". Do not start a PHP rewrite.
+
+Owner's answers recorded: hosting = own web space where npm apps have worked; I2 (persistent login throttling) = no
+opinion, leave it (low priority for one user); test-name slip in Git history = leave it.

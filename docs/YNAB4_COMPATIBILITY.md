@@ -46,7 +46,7 @@ budget vs. actual — all from real data with drill-down and CSV export. ☑️ 
 | Feature | State |
 |---|---|
 | Open a `.ynab4` budget (migration, one-way) | ✅ validated on a real budget |
-| YNAB4 CSV export import | ☑️ |
+| YNAB4 CSV export import | ✅ validated on a real export |
 | Writing YNAB4 files / syncing back to YNAB4 | ❌ not planned |
 | Multiple budgets | ✅ |
 | Backups | ➖ SQLite snapshots, automatic daily + before imports |

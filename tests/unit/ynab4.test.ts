@@ -250,3 +250,44 @@ describe('zip entry names (M4)', () => {
     expect(parseYnab4Native([{ path: fixZipName(garbled), text: JSON.stringify(toYfull(src)) }]).budgetName).toBe('Økonomi Testhusstand');
   });
 });
+
+describe('CSV import: details observed in a real YNAB4 export (M2)', () => {
+  const T = (rows: string[][]) => rows.map(r => r.join('\t')).join('\n') + '\n'; // real exports are tab-separated
+  const regHead = ['Account', 'Flag', 'Check Number', 'Date', 'Payee', 'Category', 'Master Category', 'Sub Category', 'Memo', 'Outflow', 'Inflow', 'Cleared', 'Running Balance'];
+  const budHead = ['Month', 'Category', 'Master Category', 'Sub Category', 'Budgeted', 'Outflows', 'Category Balance'];
+  const GUID1 = '06D8B97F-90DF-1D1C-5E13-78A32E8D7160', GUID2 = '7B57E8CA-6CC1-3A30-30FC-1497FEEC124B';
+  it('hidden categories "group ` name ` <guid>": correct name and group, distinct ids kept apart, group hidden only if all its categories are', () => {
+    const reg = T([regHead,
+      ['Bank', '', '', '13-01-2025', 'Job', 'Income:Available this month', 'Income', 'Available this month', '', 'kr0,00', 'kr1.000,00', 'C', 'kr1.000,00'],
+      ['Bank', '', '', '14-01-2025', 'Shop', `Hidden Categories:Gammelt ${'`'} Avis ${'`'} ${GUID1}`, 'Hidden Categories', `Gammelt \` Avis \` ${GUID1}`, '', 'kr10,00', 'kr0,00', 'C', 'kr990,00'],
+      ['Bank', '', '', '15-01-2025', 'Shop', `Hidden Categories:Gammelt \` Avis \` ${GUID2}`, 'Hidden Categories', `Gammelt \` Avis \` ${GUID2}`, '', 'kr20,00', 'kr0,00', 'C', 'kr970,00'],
+      ['Bank', '', '', '16-01-2025', 'Shop', `Hidden Categories:Hverdag \` Tv \` A15`, 'Hidden Categories', 'Hverdag ` Tv ` A15', '', 'kr5,00', 'kr0,00', 'C', 'kr965,00'],
+      ['Bank', '', '', '17-01-2025', 'Netto', 'Hverdag:Mad', 'Hverdag', 'Mad', '', 'kr15,00', 'kr0,00', 'C', 'kr950,00']]);
+    const m = parseYnab4Csv({ register: reg });
+    const where = (name: string) => m.categories.filter(c => c.name === name).map(c => [m.groups.find(g => g.sid === c.groupSid)!.name, c.name, c.hidden, m.groups.find(g => g.sid === c.groupSid)!.hidden]);
+    expect(where('Avis')).toEqual([['Gammelt', 'Avis', true, true], ['Gammelt', 'Avis', true, true]]); // two hidden categories, not merged, not named "Avis ` <guid>"
+    expect(where('Tv')).toEqual([['Hverdag', 'Tv', true, false]]); // hidden category in a group that still has visible ones
+    expect(m.groups.map(g => g.name).sort()).toEqual(['Gammelt', 'Hverdag']);
+    const dst = memBudget(); expect(applyImport(dst, m, 'fp').status).toBe('verified');
+  });
+  it('rows for a category group without categories are not turned into a category; with amounts they are an error', () => {
+    const reg = T([regHead, ['Bank', '', '', '13-01-2025', 'Job', 'Income:Available this month', 'Income', 'Available this month', '', 'kr0,00', 'kr100,00', 'C', 'kr100,00']]);
+    const bud = (v: string) => T([budHead, ['januar 2025', 'Hverdag:Mad', 'Hverdag', 'Mad', 'kr10,00', 'kr0,00', 'kr10,00'], ['januar 2025', 'Tom gruppe:', 'Tom gruppe', '', v, 'kr0,00', v]]);
+    const ok = parseYnab4Csv({ register: reg, budget: bud('kr0,00') });
+    expect(ok.categories.map(c => c.name)).toEqual(['Mad']); expect(ok.warnings.filter(w => w.level === 'error')).toEqual([]);
+    const bad = parseYnab4Csv({ register: reg, budget: bud('kr5,00') });
+    expect(bad.warnings.find(w => w.code === 'budget_group_row_with_values')!.level).toBe('error');
+  });
+  it('a single uncategorised transfer to a tracking account does not make it a budget account', () => {
+    const reg = T([regHead,
+      ['Bank', '', '', '13-01-2025', 'Job', 'Income:Available this month', 'Income', 'Available this month', '', 'kr0,00', 'kr1.000,00', 'C', 'kr1.000,00'],
+      ['Bank', '', '', '14-01-2025', 'Transfer : Lån', 'Faste:Afdrag', 'Faste', 'Afdrag', '', 'kr100,00', 'kr0,00', 'C', 'kr900,00'],
+      ['Bank', '', '', '15-01-2025', 'Transfer : Lån', '', '', '', '', 'kr50,00', 'kr0,00', 'C', 'kr850,00'],
+      ['Lån', '', '', '14-01-2025', 'Transfer : Bank', '', '', '', '', 'kr0,00', 'kr100,00', 'C', 'kr100,00'],
+      ['Lån', '', '', '15-01-2025', 'Transfer : Bank', '', '', '', '', 'kr0,00', 'kr50,00', 'C', 'kr150,00'],
+      ['Bank', '', '', '16-01-2025', 'Transfer : Opsparing', '', '', '', '', 'kr200,00', 'kr0,00', 'C', 'kr650,00'],
+      ['Opsparing', '', '', '16-01-2025', 'Transfer : Bank', '', '', '', '', 'kr0,00', 'kr200,00', 'C', 'kr200,00']]);
+    const m = parseYnab4Csv({ register: reg });
+    expect(m.accounts.map(a => [a.name, a.onBudget])).toEqual([['Bank', true], ['Lån', false], ['Opsparing', true]]);
+  });
+});

@@ -69,10 +69,16 @@ export function parseYnab4Csv(input: { register: string; budget?: string | null 
     if (!master && !sub && full.trim()) { const i = full.indexOf(':'); if (i > 0) { master = full.slice(0, i).trim(); sub = full.slice(i + 1).trim(); } else sub = full.trim(); }
     if (!master && !sub) return null;
     if (/^income$/i.test(master)) { if (/next month/i.test(sub)) return SID_INCOME_NEXT; if (/this month/i.test(sub) || !sub) return SID_INCOME_THIS; }
-    let hidden = false;
-    if (/^hidden categories$/i.test(master)) { const p = /^(.*) ` (.*) ` \d*$/.exec(sub) ?? /^(.*) ` (.*)$/.exec(sub); if (p) { master = p[1]; sub = p[2]; } hidden = true; }
+    let hidden = false, key = '';
+    if (/^hidden categories$/i.test(master)) {
+      // "<group name when hidden> ` <category name> ` <group id>" (observed in a real export; the id is a GUID or short id).
+      // The full text identifies the category; it is shown under the group name it had when it was hidden.
+      const p = sub.split(' ` '); key = 'hidden\u0000' + sub;
+      if (p.length >= 3) { master = p[0]; sub = p.slice(1, -1).join(' ` '); } else if (p.length === 2) { master = p[0]; sub = p[1]; }
+      hidden = true;
+    }
     if (!master) master = 'Uncategorised group'; if (!sub) sub = master;
-    const key = master + '\u0000' + sub; let s = catSid.get(key);
+    key ||= master + '\u0000' + sub; let s = catSid.get(key);
     if (!s) { s = 'c:' + master + ':' + sub; catSid.set(key, s); model.categories.push({ sid: s, groupSid: ensureGroup(master), name: sub, hidden, note: '' }); }
     return s;
   };
@@ -84,14 +90,22 @@ export function parseYnab4Csv(input: { register: string; budget?: string | null 
     const B = { month: bh.indexOf('month'), category: bh.indexOf('category'), master: bh.indexOf('master category'), sub: bh.indexOf('sub category'), budgeted: bh.indexOf('budgeted'), outflows: bh.indexOf('outflows'), balance: bh.indexOf('category balance') };
     if (B.month < 0 || B.budgeted < 0) throw new Error('Budget file is missing the "Month"/"Budgeted" columns — is this a YNAB4 Budget export?');
     let badMonth = 0, badNum = 0;
+    let placeholderMoney = 0;
     for (const r of br.slice(1)) {
+      if (r.every(v => !v.trim())) continue;
       const month = parseMonthLabel(r[B.month] ?? ''); if (!month) { badMonth++; continue; }
+      // a category group without categories is exported as a row with an empty Sub Category: not a category
+      if (B.sub >= 0 && !(r[B.sub] ?? '').trim() && (B.master >= 0 && (r[B.master] ?? '').trim()) && !/^income$/i.test((r[B.master] ?? '').trim())) {
+        if ([B.budgeted, B.outflows, B.balance].some(i => i >= 0 && (money(r[i]) ?? 1) !== 0)) placeholderMoney++;
+        continue;
+      }
       const sid = mapCat(B.master >= 0 ? r[B.master] ?? '' : '', B.sub >= 0 ? r[B.sub] ?? '' : '', B.category >= 0 ? r[B.category] ?? '' : '');
       if (!sid || sid === SID_INCOME_THIS || sid === SID_INCOME_NEXT) continue;
       const budgeted = money(r[B.budgeted]), outflows = B.outflows >= 0 ? money(r[B.outflows]) : 0, balance = B.balance >= 0 ? money(r[B.balance]) : null;
       if (budgeted === null || outflows === null) { badNum++; continue; }
       brows.push({ month, sid, budgeted, outflows, balance: balance ?? NaN });
     }
+    if (placeholderMoney) warnings.push({ level: 'error', code: 'budget_group_row_with_values', message: `${placeholderMoney} budget row(s) belong to a category group without a category name but carry amounts; they could not be imported.`, count: placeholderMoney });
     if (badMonth) warnings.push({ level: 'error', code: 'budget_month_unreadable', message: `${badMonth} budget row(s) have an unreadable month and were skipped.`, count: badMonth });
     if (badNum) warnings.push({ level: 'error', code: 'budget_amount_unreadable', message: `${badNum} budget row(s) have unreadable amounts and were skipped.`, count: badNum });
   }
@@ -125,13 +139,17 @@ export function parseYnab4Csv(input: { register: string; budget?: string | null 
   // An account is a budget account if any of its rows carries a category, or if it exchanges
   // uncategorised transfers with a budget account (YNAB4 requires a category on transfers to tracking accounts).
   const budgetLike = new Set<string>();
-  for (const p of parsed) if (p.cat) budgetLike.add(p.account);
+  for (const p of parsed) if (p.cat && !TRANSFER_RE.test(p.payee)) budgetLike.add(p.account);
+  // A categorised transfer row is spending/income across the budget boundary, so its far side is a tracking account
+  // (YNAB4 never puts a category on a transfer between two budget accounts). Such accounts are never propagated to.
+  const tracking = new Set<string>();
+  for (const p of parsed) { const tm = TRANSFER_RE.exec(p.payee); if (tm && p.cat) { budgetLike.add(p.account); tracking.add(tm[1].trim()); } }
   for (let changed = true; changed;) {
     changed = false;
     for (const p of parsed) {
       const tm = TRANSFER_RE.exec(p.payee); const other = tm?.[1].trim();
       if (!other || p.cat || !accountOrder.includes(other)) continue;
-      if (budgetLike.has(p.account) && !budgetLike.has(other)) { budgetLike.add(other); changed = true; }
+      if (budgetLike.has(p.account) && !budgetLike.has(other) && !tracking.has(other)) { budgetLike.add(other); changed = true; }
     }
   }
   for (const name of accountOrder) { const o = opts.accounts?.[name];
@@ -205,6 +223,8 @@ export function parseYnab4Csv(input: { register: string; budget?: string | null 
     if (t.payeeName && !payeeSet.has(t.payeeName.toLowerCase()) && !TRANSFER_RE.test(t.payeeName)) payeeSet.set(t.payeeName.toLowerCase(), t.payeeName);
   }
   model.payees = [...payeeSet.values()].map(name => ({ name: name!, autoCategorySid: null }));
+  // a group is hidden only when every category in it is hidden (hidden categories may share a group with visible ones)
+  for (const g of model.groups) { const cs = model.categories.filter(c => c.groupSid === g.sid); g.hidden = cs.length > 0 && cs.every(c => c.hidden); }
   model.transactions = txns.map(({ _row, ...t }) => t);
 
   // ---- expected balances from the Running Balance column (only when it is self-consistent)
