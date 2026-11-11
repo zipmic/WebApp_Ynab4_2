@@ -80,6 +80,6 @@ you must change the reference deliberately as well — a disagreement fails the 
 ## Open points
 - Rules 11 and 16 are assumptions.
 - A definitive check of month balances needs YNAB4's own numbers: a `Budget.csv` export from YNAB4 (File → Export).
-  The CSV importer already compares every category-month against it; comparing a *native* import against that
-  export is backlog item M1 in `docs/OPUS_HANDOFF.md`.
+  The comparison is implemented (`npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, see DATA_MIGRATION.md)
+  and waits for the owner's export.
 - Rounding: quick-budget averages round half away from zero; YNAB4's rounding there is unverified (does not affect imported data).

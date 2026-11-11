@@ -9,6 +9,7 @@
 import type { BudgetService } from './budgetService.ts';
 import { addMonths } from '../shared/dates.ts';
 import { loadYfull, type SourceFile } from '../shared/ynab4native.ts';
+import { readYnab4BudgetCsv, type Ynab4BudgetRow } from '../shared/ynab4csv.ts';
 
 export type AreaStatus = 'PASS' | 'FAIL' | 'PARTIAL' | 'INFO';
 export interface AuditArea { area: string; status: AreaStatus; source: number | null; imported: number | null; detail: string; examples: string[] }
@@ -186,6 +187,72 @@ export function auditNativeImport(files: SourceFile[], svc: BudgetService): Migr
   const unrec = Object.fromEntries(Object.entries(unrecognized).map(([k, v]) => [k, [...v].sort()]));
   areas.push({ area: 'Unrecognised fields in the source', source: null, imported: null, status: Object.keys(unrec).length ? 'PARTIAL' : 'PASS', examples: Object.entries(unrec).map(([k, v]) => `${k}: ${v.join(', ')}`),
     detail: Object.keys(unrec).length ? 'fields this version does not know about (listed by name only) — investigate before relying on the import' : 'every field in the file is known' });
-  const verdict = areas.some(a => a.status === 'FAIL') ? 'FAIL' : areas.some(a => a.status === 'PARTIAL') ? 'PARTIAL' : 'PASS';
+  const verdict = verdictOf(areas);
   return { verdict, areas, unrecognizedFields: unrec, skipped: skipped.filter(s => s.count > 0) };
+}
+
+/** Overall verdict for a list of areas (FAIL beats PARTIAL beats PASS; INFO is neutral). */
+export function verdictOf(areas: AuditArea[]): MigrationAudit['verdict'] {
+  return areas.some(a => a.status === 'FAIL') ? 'FAIL' : areas.some(a => a.status === 'PARTIAL') ? 'PARTIAL' : 'PASS';
+}
+
+/**
+ * Compares an imported budget with YNAB4's OWN month figures from its Budget export (File → Export → Budget.csv):
+ * budgeted, outflows and category balance for every category-month in the export. This is the only way to check the
+ * computed balances against YNAB4 itself, because the native file does not store them.
+ * Categories are matched by group name + category name (hidden ones by their original names). Examples in the
+ * result name CSV line numbers and months only — never category names or amounts — so they are safe to print.
+ */
+export function compareWithBudgetCsv(svc: BudgetService, csvText: string): AuditArea[] {
+  const csv = readYnab4BudgetCsv(csvText);
+  const areas: AuditArea[] = [];
+  const groups = new Map(svc.listGroups().map(g => [g.id, g.name]));
+  const key = (g: string, c: string) => `${g.trim().toLowerCase()}\u0000${c.trim().toLowerCase()}`;
+  const byName = new Map<string, string[]>();
+  for (const c of svc.listCategories()) { const k = key(groups.get(c.groupId) ?? '', c.name); (byName.get(k) ?? byName.set(k, []).get(k)!).push(c.id); }
+
+  // 1. which export rows can be tied to exactly one imported category
+  const unmatched: string[] = [], ambiguous: string[] = [];
+  const matched: { row: Ynab4BudgetRow; id: string }[] = [];
+  for (const row of csv.rows) {
+    const ids = byName.get(key(row.group, row.category)) ?? [];
+    if (ids.length === 1) matched.push({ row, id: ids[0] });
+    else (ids.length ? ambiguous : unmatched).push(`CSV line ${row.line} (${row.month})${row.hidden ? ', hidden category' : ''}`);
+  }
+  const unreadable = csv.unreadable.map(u => `CSV line ${u.line}: ${u.reason}`);
+  areas.push({ area: 'YNAB4 export: rows matched to imported categories', source: csv.rows.length + csv.unreadable.length, imported: matched.length,
+    status: unmatched.length || unreadable.length ? 'FAIL' : ambiguous.length ? 'PARTIAL' : 'PASS',
+    detail: unmatched.length || ambiguous.length || unreadable.length
+      ? `${unmatched.length} row(s) name a category that does not exist after import, ${ambiguous.length} match more than one category (same group and name), ${unreadable.length} unreadable`
+      : `every row matched (${new Set(matched.map(m => m.row.month)).size} months, number format ${csv.decimal})`,
+    examples: [...unreadable, ...unmatched, ...ambiguous].slice(0, 12) });
+  if (!matched.length) return areas;
+
+  // 2. sign convention of "Outflows": decided by the data, and stated — never silently assumed
+  const months = [...new Set(matched.map(m => m.row.month))].sort();
+  const eng = new Map(months.map(m => [m, new Map(svc.getBudget(m).rows.map(r => [r.categoryId, r]))]));
+  const cell = (m: string, id: string) => eng.get(m)!.get(id);
+  let pos = 0, neg = 0;
+  for (const { row, id } of matched) { const a = cell(row.month, id)?.activity ?? 0; if (a === 0 && row.outflows === 0) continue; if (row.outflows === -a) pos++; if (row.outflows === a) neg++; }
+  const sign = neg > pos ? 1 : -1; // activity = sign × outflows
+  // 3. the three figures, cell by cell
+  const diff = { budgeted: [] as string[], activity: [] as string[], balance: [] as string[] };
+  const seen = new Set<string>();
+  for (const { row, id } of matched) {
+    seen.add(`${row.month}|${id}`); const e = cell(row.month, id); const where = `CSV line ${row.line} (${row.month})`;
+    if ((e?.budgeted ?? 0) !== row.budgeted) diff.budgeted.push(where);
+    if ((e?.activity ?? 0) !== sign * row.outflows) diff.activity.push(where);
+    if ((e?.available ?? 0) !== row.balance) diff.balance.push(where);
+  }
+  // cells the export does not mention but the import has values for, in the months the export covers
+  const extra: string[] = [];
+  for (const m of months) for (const [id, r] of eng.get(m)!) if (!seen.has(`${m}|${id}`) && (r.budgeted || r.activity || r.available)) extra.push(`${m}, category ${id}`);
+  const n = matched.length;
+  const add = (area: string, list: string[], ok: string) => areas.push({ area, source: n, imported: n - list.length, status: list.length ? 'FAIL' : 'PASS', detail: list.length ? `${list.length} of ${n} category-months differ; first in ${list.map(x => /\((\d{4}-\d{2})\)/.exec(x)?.[1] ?? '').filter(Boolean).sort()[0] ?? '?'}` : ok, examples: list.slice(0, 12) });
+  add('YNAB4 export: budgeted amounts', diff.budgeted, `identical in all ${n} category-months`);
+  add('YNAB4 export: activity (Outflows column)', diff.activity, `identical in all ${n} category-months (Outflows read as ${sign === -1 ? 'positive = money out' : 'negative = money out'})`);
+  add('YNAB4 export: category balances (rollover)', diff.balance, `identical in all ${n} category-months, ${months[0]} – ${months[months.length - 1]}`);
+  areas.push({ area: 'YNAB4 export: imported values the export does not list', source: null, imported: extra.length, status: extra.length ? 'FAIL' : 'PASS',
+    detail: extra.length ? `${extra.length} category-month(s) have budgeted/activity/balance after import but no row in the export` : 'none', examples: extra.slice(0, 12) });
+  return areas;
 }

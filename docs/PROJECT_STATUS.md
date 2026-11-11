@@ -1,6 +1,6 @@
 # Project status
 
-Last updated at the end of the Fable phase. Test counts: 98 unit/integration tests, 17 browser steps, benchmark with limits — all passing at that point.
+Last updated after backlog item M1 (tool part). Test counts: 106 unit/integration tests, 17 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -12,6 +12,7 @@ Last updated at the end of the Fable phase. Test counts: 98 unit/integration tes
 | Scheduled transactions (entered when due) | unit tests |
 | **Native YNAB4 import** | real budget: every financial area PASS; synthetic regression tests |
 | Independent migration audit + CLI (`npm run audit:ynab4`) | unit tests incl. deliberate damage detection; real budget |
+| Comparison of an import with YNAB4's own Budget export (`--budget-csv`, M1) | 8 synthetic tests (faithful import passes; wrong cell, unknown category, unreadable row, missing row detected; hidden categories and both Outflows sign conventions); **not yet run on the owner's real export** |
 | Import safety: preview without writing, new budget only, rollback on failure, duplicate-import guard | unit/API tests; real zip through the API |
 | Concurrent-edit detection (revision, 409 STALE) | unit + API tests incl. simultaneous requests |
 | Atomic operations (failed step leaves nothing behind) | unit tests |
@@ -27,7 +28,7 @@ Last updated at the end of the Fable phase. Test counts: 98 unit/integration tes
 | Item | What is missing |
 |---|---|
 | YNAB4 **CSV** import | never run against a real YNAB4 export (headers/formatting from memory) |
-| Month balances vs. YNAB4's own figures | needs a YNAB4 `Budget.csv` export of the real budget (backlog M1) |
+| Month balances vs. YNAB4's own figures | tool ready (`npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`); waiting for the owner's YNAB4 export |
 | `.ydiff` merging when the full copy is behind | only synthetic tests; the real budget needed no merge |
 | Account types / frequencies not present in the real budget | mapping from documentation only |
 | Uncategorised-transaction rule, reconciliation-adjustment category | assumed YNAB4 behaviour |

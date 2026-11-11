@@ -100,6 +100,16 @@ Payee names differing only in letter case/spacing are merged (15 of 2,350 in the
 Not imported by design (tombstones): 12 accounts, 128 categories, 553 transactions, 197 budget cells, 57 schedules.
 Through the HTTP API (as the wizard sends it, including zip junk): preview 0.9 s, commit 1.0 s, second import refused (`ALREADY_IMPORTED`).
 
+## Checking against YNAB4's own month figures
+YNAB4 does not store computed balances in its budget file, so the strongest check is against its own Budget export:
+```bash
+npm run audit:ynab4 -- "<.ynab4 folder or zip>" --budget-csv "<…-Budget.csv>" [--json <file outside the repo>]
+```
+This adds five areas: rows matched to imported categories (by group + category name; hidden categories by their
+original names), budgeted amounts, activity (Outflows column — its sign convention is detected from the data and
+stated), category balances, and imported values the export does not list. Examples name CSV line numbers and months
+only. Code: `readYnab4BudgetCsv` (`src/shared/ynab4csv.ts`), `compareWithBudgetCsv` (`src/server/migrationAudit.ts`).
+
 ## Safeguards
 - Preview = the real import into a throw-away in-memory database, so the user sees the real audit before anything is written.
 - Commit creates a **new** budget file; on any error the file is deleted. Existing budgets are backed up first and never modified.
@@ -114,7 +124,7 @@ budget/tracking inferred (overridable in the wizard), red-arrow settings inferre
 Every category-month is compared with the Budget export.
 
 ## Remaining risks
-1. Month balances are verified by the zero test and internal consistency, not by YNAB4's own balance figures (see BUDGET_ENGINE.md, Open points).
+1. Month balances are verified by the zero test and internal consistency; the comparison with YNAB4's own figures (`--budget-csv`) is ready but has not yet been run on the owner's export.
 2. `.ydiff` merging is exercised by synthetic tests and by an ordering check on real diffs, but no real budget needing a merge has been imported.
 3. Account types Cash, LineOfCredit, PayPal, MerchantAccount, InvestmentAccount, Mortgage and frequencies not in the list above were never seen in real data.
 4. Split-line transfers and scheduled splits do not occur in the real budget; only synthetic tests cover them.

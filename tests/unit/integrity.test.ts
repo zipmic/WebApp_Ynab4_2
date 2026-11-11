@@ -5,7 +5,8 @@ import type { App } from '../../src/server/app.ts';
 import { BudgetService } from '../../src/server/budgetService.ts';
 import { BUDGET_MIGRATIONS, BUDGET_SCHEMA_VERSION, openBudgetDb } from '../../src/server/db.ts';
 import { applyImport } from '../../src/server/importService.ts';
-import { auditNativeImport } from '../../src/server/migrationAudit.ts';
+import { auditNativeImport, compareWithBudgetCsv, verdictOf } from '../../src/server/migrationAudit.ts';
+import { exportYnab4Csv } from '../fixtures/ynab4csv.ts';
 import { parseYnab4Native } from '../../src/shared/ynab4native.ts';
 import { generateBudget, toYfull } from '../fixtures/generate.ts';
 import { basicBudget, login, memBudget, testApp } from './helpers.ts';
@@ -145,5 +146,63 @@ describe('independent migration audit (the tool run against the real budget)', (
     const { y } = build(); y.transactions[0].someNewField = 1; y.accounts[0].accountType = 'CryptoWallet';
     const files = [{ path: 'Budget.yfull', text: JSON.stringify(y) }]; const dst = memBudget(); applyImport(dst, parseYnab4Native(files), 'fp'); const a = auditNativeImport(files, dst);
     expect(a.unrecognizedFields).toEqual({ transaction: ['someNewField'] }); expect(a.areas.find(x => x.area.startsWith('Field values'))!.status).toBe('PARTIAL'); expect(a.verdict).toBe('PARTIAL');
+  });
+});
+
+describe('comparison with YNAB4\'s own Budget export (M1)', () => {
+  const setup = () => {
+    const src = memBudget(); const g = generateBudget(src, { startMonth: '2024-10', months: 14, txPerMonth: 30, seed: 33 });
+    const { budget } = exportYnab4Csv(src, { first: g.firstMonth, last: g.lastMonth });
+    const dst = memBudget(); applyImport(dst, parseYnab4Native([{ path: 'b.ynab4/Budget.yfull', text: JSON.stringify(toYfull(src)) }]), 'fp');
+    return { src, dst, budget, g };
+  };
+  const lines = (csv: string) => csv.split('\r\n').filter(Boolean);
+  const failing = (areas: ReturnType<typeof compareWithBudgetCsv>) => areas.filter(a => a.status === 'FAIL').map(a => a.area);
+  it('a faithful native import matches every category-month of the export', () => {
+    const { dst, budget } = setup(); const areas = compareWithBudgetCsv(dst, budget);
+    expect(failing(areas)).toEqual([]); expect(verdictOf(areas)).toBe('PASS');
+    expect(areas.find(a => a.area.includes('category balances'))!.source).toBe(lines(budget).length - 1);
+    expect(areas.find(a => a.area.includes('Outflows'))!.detail).toMatch(/positive = money out/);
+  });
+  it('one wrong cell is found and pinpointed by CSV line and month only', () => {
+    const { dst, budget } = setup(); const rows = lines(budget);
+    const i = rows.findIndex((r, k) => k > 0 && /"Dagligvarer"/.test(r));
+    const cols = rows[i].split('","'); cols[6] = 'kr1,00"'; rows[i] = cols.join('","'); // Category Balance off
+    const areas = compareWithBudgetCsv(dst, rows.join('\r\n') + '\r\n');
+    expect(failing(areas)).toEqual(['YNAB4 export: category balances (rollover)']);
+    const bal = areas.find(a => a.area.includes('category balances'))!;
+    expect(bal.examples).toEqual([expect.stringMatching(new RegExp(`^CSV line ${i + 1} \\(\\d{4}-\\d{2}\\)$`))]);
+    expect(JSON.stringify(areas)).not.toMatch(/Dagligvarer|Hverdag|kr\d/); // nothing private in the result
+  });
+  it('a different budgeted amount (with the export\'s own balance unchanged) fails only budgeted', () => {
+    const { dst, budget } = setup(); const rows = lines(budget);
+    const i = rows.findIndex((r, k) => k > 0 && /"Husleje"/.test(r)); const cols = rows[i].split('","'); cols[4] = 'kr1,00'; rows[i] = cols.join('","');
+    expect(failing(compareWithBudgetCsv(dst, rows.join('\r\n')))).toEqual(['YNAB4 export: budgeted amounts']);
+  });
+  it('a category missing after import and an unreadable row are failures, never skipped silently', () => {
+    const { dst, budget } = setup(); const rows = lines(budget);
+    rows.push('"January 2025","Ukendt: Ting","Ukendt","Ting","kr0,00","kr0,00","kr0,00"', '"Smarch 2025","Hverdag: Tøj","Hverdag","Tøj","kr0,00","kr0,00","kr0,00"');
+    const a = compareWithBudgetCsv(dst, rows.join('\r\n'))[0];
+    expect(a.status).toBe('FAIL'); expect(a.detail).toMatch(/1 row\(s\) name a category that does not exist.*1 unreadable/);
+  });
+  it('values the import has but the export lacks are reported', () => {
+    const { dst, budget } = setup(); const rows = lines(budget); const head = rows[0];
+    const drop = rows.findIndex((r, k) => k > 0 && /"Transport"/.test(r));
+    const areas = compareWithBudgetCsv(dst, [head, ...rows.slice(1).filter((_, k) => k + 1 !== drop)].join('\r\n'));
+    expect(failing(areas)).toEqual(['YNAB4 export: imported values the export does not list']);
+  });
+  it('hidden categories in the export ("Hidden Categories" / "Group ` Name ` id") match their original category', () => {
+    const { dst, budget } = setup(); const rows = lines(budget);
+    const out = rows.map((r, k) => { if (k === 0 || !/"Hobby"/.test(r)) return r; const c = r.split('","'); c[1] = 'Hidden Categories: Fornøjelser ` Hobby ` 1A2B'; c[2] = 'Hidden Categories'; c[3] = 'Fornøjelser ` Hobby ` 1A2B'; return c.join('","'); });
+    const areas = compareWithBudgetCsv(dst, out.join('\r\n')); expect(failing(areas)).toEqual([]);
+  });
+  it('an export that writes Outflows as negative numbers is recognised, and the convention is stated', () => {
+    const { dst, budget } = setup();
+    const flipped = lines(budget).map((r, k) => { if (k === 0) return r; const c = r.split('","'); c[5] = c[5] === 'kr0,00' ? c[5] : c[5].startsWith('-') ? c[5].slice(1) : '-' + c[5]; return c.join('","'); });
+    const areas = compareWithBudgetCsv(dst, flipped.join('\r\n'));
+    expect(failing(areas)).toEqual([]); expect(areas.find(a => a.area.includes('Outflows'))!.detail).toMatch(/negative = money out/);
+  });
+  it('rejects a file that is not a Budget export', () => {
+    expect(() => compareWithBudgetCsv(memBudget(), '"Account","Date","Payee"\r\n')).toThrow(/not a YNAB4 Budget export/);
   });
 });
