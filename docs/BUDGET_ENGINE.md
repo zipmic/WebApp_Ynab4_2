@@ -3,6 +3,13 @@
 Code: `src/shared/engine.ts` (pure, ~120 lines). Fed by `BudgetService.engine()` in `src/server/budgetService.ts`.
 All amounts are integers in minor units (øre). The engine throws on a non-integer.
 
+## Strongest evidence: YNAB4's own figures
+The owner exported the real budget from YNAB4 (Budget.csv: budgeted, outflows and category balance for every category
+in every month). Comparing it with a native import of the same budget (`npm run audit:ynab4 -- <zip> --budget-csv …`):
+**budgeted, activity and category balance are identical in all 51,770 category-months, 2014-03 – 2028-01**, and the
+import has no values the export lacks. Every rule that influences a category balance (1–10, 12–15 below) is therefore
+confirmed against YNAB4 itself. Available to Budget is not in the export; it remains confirmed by the zero test below.
+
 ## Evidence levels used below
 - **VERIFIED-REAL** — confirmed against the owner's real YNAB4 budget (12 years, 7,208 live transactions, 180 budget months).
 - **VERIFIED-FILE** — confirmed from the structure of the real file (field values/patterns), not from computed balances.
@@ -79,7 +86,5 @@ you must change the reference deliberately as well — a disagreement fails the 
 
 ## Open points
 - Rules 11 and 16 are assumptions.
-- A definitive check of month balances needs YNAB4's own numbers: a `Budget.csv` export from YNAB4 (File → Export).
-  The comparison is implemented (`npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, see DATA_MIGRATION.md)
-  and waits for the owner's export.
+- Month balances: settled — identical to YNAB4's own export in all 51,770 category-months (see top of this file).
 - Rounding: quick-budget averages round half away from zero; YNAB4's rounding there is unverified (does not affect imported data).

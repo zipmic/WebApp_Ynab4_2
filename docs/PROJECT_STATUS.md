@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1 (tool part), M3, M4, I1, I3, D2 and D3. Test counts: 114 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1, M3, M4, I1, I3, D2 and D3. Test counts: 116 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -14,7 +14,7 @@ Last updated after backlog items M1 (tool part), M3, M4, I1, I3, D2 and D3. Test
 | Independent migration audit + CLI (`npm run audit:ynab4`) | unit tests incl. deliberate damage detection; real budget |
 | Readable budget names from zips made without the UTF-8 name flag (macOS), e.g. folder names with Æ/Ø/Å (M4) | unit tests; checked on the owner's real zip (booleans only) |
 | Independent audit shown in the import wizard (verify + done steps) and Settings → Migration report; a FAIL verdict prevents the "verified" label (M3) | unit tests + browser step with a synthetic native budget |
-| Comparison of an import with YNAB4's own Budget export (`--budget-csv`, M1) | 8 synthetic tests (faithful import passes; wrong cell, unknown category, unreadable row, missing row detected; hidden categories and both Outflows sign conventions); **not yet run on the owner's real export** |
+| Comparison of an import with YNAB4's own Budget export (`--budget-csv`, M1) | 10 synthetic tests; **owner's real export: budgeted, activity and balance identical in all 51,770 category-months** |
 | Import safety: preview without writing, new budget only, rollback on failure, duplicate-import guard | unit/API tests; real zip through the API |
 | Concurrent-edit detection (revision, 409 STALE) and the client's reaction (message, refresh, retry; failed writes rolled back on screen) | unit + API tests incl. simultaneous requests; browser test with two devices (I1) |
 | Atomic operations (failed step leaves nothing behind) | unit tests |
@@ -32,7 +32,6 @@ Last updated after backlog items M1 (tool part), M3, M4, I1, I3, D2 and D3. Test
 | Item | What is missing |
 |---|---|
 | YNAB4 **CSV** import | never run against a real YNAB4 export (headers/formatting from memory) |
-| Month balances vs. YNAB4's own figures | tool ready (`npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`); waiting for the owner's YNAB4 export |
 | `.ydiff` merging when the full copy is behind | only synthetic tests; the real budget needed no merge |
 | Account types / frequencies not present in the real budget | mapping from documentation only |
 | Uncategorised-transaction rule, reconciliation-adjustment category | assumed YNAB4 behaviour |

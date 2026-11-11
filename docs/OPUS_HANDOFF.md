@@ -59,7 +59,7 @@ cannot run this backend. Do **not** start a PHP rewrite; ask the owner which Nod
 Work top to bottom unless the owner says otherwise. Each task is small; finish, test and commit one before the next.
 
 ### M — Migration confidence (highest priority)
-**M1. Compare a native import with YNAB4's own Budget.csv** — *tool done (steps 2–4 below); step 5, the run on the owner's real export, is open until the owner provides the files*
+**M1. Compare a native import with YNAB4's own Budget.csv** — *done*: on the owner's real export all 51,770 category-months are identical (budgeted, activity, balance). The real export showed two things the first version did not handle, both fixed with tests: hidden categories whose group was renamed after hiding (now matched by full YNAB4 name via the source files) and empty-group rows.
 - Add `--budget-csv <file>` to `scripts/audit-ynab4.ts`: parse the Budget export with the existing code in `ynab4csv.ts` (reuse its month/amount parsing; categories match by group name + category name, hidden categories by their original names), and compare budgeted, outflows and balance for every category-month with `svc.getBudget(month)`.
 - Accept: a new audit area "Month values vs. YNAB4 export" with PASS/FAIL, counts and (ids/names only in a `--json` file outside the repo); synthetic test using `exportYnab4Csv` from `tests/unit/ynab4.test.ts` (move it to `tests/fixtures`); one deliberately wrong cell is detected.
 - If the real comparison shows differences: stop and report to the owner with the affected months and categories before changing `engine.ts`.
@@ -123,11 +123,9 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 ## 15. Exact next task
-If the owner has provided the YNAB4 export: finish **M1 step 5** (run `npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, report counts only, update the docs). Otherwise continue with **D1** (it needs the owner's hosting choice). I2 needs the owner's approval (it changes a security mechanism and the system schema). If both are open, continue with **U1**.
-
-Original M1 plan, for reference (steps 2–4 are done):
-1. Ask the owner for a YNAB4 export of the real budget (YNAB4 → File → Export → both files) and a path where it is stored outside the repository. If they cannot run YNAB4 any more, say so in `docs/PROJECT_STATUS.md`, skip to M3, and leave M1/M2 open.
-2. Move `exportYnab4Csv` from `tests/unit/ynab4.test.ts` to `tests/fixtures/ynab4csv.ts` (no behaviour change; tests still pass).
-3. Implement `compareWithBudgetCsv(svc, csvText)` in `src/server/migrationAudit.ts` and the `--budget-csv` option in `scripts/audit-ynab4.ts`.
-4. Add the synthetic tests described under M1.
-5. Run it on the real files; report the result to the owner (aggregates only); update `docs/BUDGET_ENGINE.md` ("Open points") and `docs/PROJECT_STATUS.md`.
+**M2**: validate the CSV importer against the owner's real Register.csv + Budget.csv (structure observed: see DATA_MIGRATION.md).
+Run them through the import preview in a temporary data directory, compare account balances and the audit with the native
+import, fix mismatches with synthetic regression tests, report counts only. Owner's answers so far: hosting = the
+owner's own web space, where other npm/Node apps have worked (D1: ask for its control-panel type when writing the
+guide); I2 = no opinion from the owner (leave it, it is low priority for a single user); the earlier test-name slip in
+Git history = owner says leave it.

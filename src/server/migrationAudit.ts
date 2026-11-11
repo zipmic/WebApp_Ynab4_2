@@ -203,8 +203,20 @@ export function verdictOf(areas: AuditArea[]): MigrationAudit['verdict'] {
  * Categories are matched by group name + category name (hidden ones by their original names). Examples in the
  * result name CSV line numbers and months only — never category names or amounts — so they are safe to print.
  */
-export function compareWithBudgetCsv(svc: BudgetService, csvText: string): AuditArea[] {
+export function compareWithBudgetCsv(svc: BudgetService, csvText: string, sourceFiles?: SourceFile[]): AuditArea[] {
   const csv = readYnab4BudgetCsv(csvText);
+  // Hidden categories: the export writes the group name as it was when the category was hidden, and that group may
+  // since have been renamed or deleted. When the original .ynab4 files are given, match hidden rows by their full
+  // YNAB4 name ("group ` name ` group id", identical in file and export) → entity id → imported category.
+  const hiddenById = new Map<string, string>();
+  if (sourceFiles) {
+    const bySource = new Map((svc.db.prepare(`SELECT id, source_id FROM categories WHERE source_id IS NOT NULL`).all() as { id: string; source_id: string }[]).map(c => [c.source_id, c.id]));
+    const { budget } = loadYfull(sourceFiles, []);
+    for (const m of (budget.masterCategories ?? []) as any[]) if (m.entityId === 'MasterCategory/__Hidden__') for (const s of (m.subCategories ?? []) as any[]) {
+      const id = bySource.get(s.entityId); if (!id || s.isTombstone) continue; const k = String(s.name).trim().toLowerCase();
+      hiddenById.set(k, hiddenById.has(k) && hiddenById.get(k) !== id ? '' : id); // '' = ambiguous
+    }
+  }
   const areas: AuditArea[] = [];
   const groups = new Map(svc.listGroups().map(g => [g.id, g.name]));
   const key = (g: string, c: string) => `${g.trim().toLowerCase()}\u0000${c.trim().toLowerCase()}`;
@@ -215,16 +227,20 @@ export function compareWithBudgetCsv(svc: BudgetService, csvText: string): Audit
   const unmatched: string[] = [], ambiguous: string[] = [];
   const matched: { row: Ynab4BudgetRow; id: string }[] = [];
   for (const row of csv.rows) {
-    const ids = byName.get(key(row.group, row.category)) ?? [];
+    const viaSource = row.hidden ? hiddenById.get(row.rawCategory.trim().toLowerCase()) : undefined;
+    const ids = viaSource !== undefined ? (viaSource ? [viaSource] : ['?', '?']) : byName.get(key(row.group, row.category)) ?? [];
     if (ids.length === 1) matched.push({ row, id: ids[0] });
     else (ids.length ? ambiguous : unmatched).push(`CSV line ${row.line} (${row.month})${row.hidden ? ', hidden category' : ''}`);
   }
   const unreadable = csv.unreadable.map(u => `CSV line ${u.line}: ${u.reason}`);
-  areas.push({ area: 'YNAB4 export: rows matched to imported categories', source: csv.rows.length + csv.unreadable.length, imported: matched.length,
+  // a group without categories appears as a row with an empty category; acceptable only while it carries no money
+  const placeholderWithMoney = csv.groupPlaceholders.filter(r => r.budgeted || r.outflows || r.balance).map(r => `CSV line ${r.line} (${r.month}), group row with values`);
+  unmatched.push(...placeholderWithMoney);
+  areas.push({ area: 'YNAB4 export: rows matched to imported categories', source: csv.rows.length + csv.unreadable.length + placeholderWithMoney.length, imported: matched.length,
     status: unmatched.length || unreadable.length ? 'FAIL' : ambiguous.length ? 'PARTIAL' : 'PASS',
     detail: unmatched.length || ambiguous.length || unreadable.length
       ? `${unmatched.length} row(s) name a category that does not exist after import, ${ambiguous.length} match more than one category (same group and name), ${unreadable.length} unreadable`
-      : `every row matched (${new Set(matched.map(m => m.row.month)).size} months, number format ${csv.decimal})`,
+      : `every row matched (${new Set(matched.map(m => m.row.month)).size} months, number format ${csv.decimal}${csv.groupPlaceholders.length ? `; ${csv.groupPlaceholders.length} empty group row(s) with no values` : ''})`,
     examples: [...unreadable, ...unmatched, ...ambiguous].slice(0, 12) });
   if (!matched.length) return areas;
 

@@ -32,7 +32,7 @@ const model = parseYnab4Native(files);
 const svc = new BudgetService(openBudgetDb(':memory:'), 'audit');
 const result = applyImport(svc, model, 'audit');
 const audit = auditNativeImport(files, svc);
-if (budgetCsv) { audit.areas.push(...compareWithBudgetCsv(svc, decodeBytes(new Uint8Array(readFileSync(budgetCsv))).text)); audit.verdict = verdictOf(audit.areas); }
+if (budgetCsv) { audit.areas.push(...compareWithBudgetCsv(svc, decodeBytes(new Uint8Array(readFileSync(budgetCsv))).text, files)); audit.verdict = verdictOf(audit.areas); }
 const pad = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
 console.log(`\nYNAB4 migration audit — ${files.length} source file(s) read, import status: ${result.status}\n`);
 console.log(pad('AREA', 66) + pad('RESULT', 9) + pad('SOURCE', 9) + pad('IMPORTED', 10) + 'DETAIL');

@@ -203,6 +203,28 @@ describe('comparison with YNAB4\'s own Budget export (M1)', () => {
     const areas = compareWithBudgetCsv(dst, flipped.join('\r\n'));
     expect(failing(areas)).toEqual([]); expect(areas.find(a => a.area.includes('Outflows'))!.detail).toMatch(/negative = money out/);
   });
+  it('hidden category whose group was renamed after hiding: matched by its full YNAB4 name when the source files are given', () => {
+    const { src, g, budget } = setup();
+    src.updateCategory(g.categories.Hobby, { hidden: true });
+    const y = toYfull(src); const hidden = y.masterCategories.find((m: any) => m.entityId === 'MasterCategory/__Hidden__');
+    const fun = y.masterCategories.find((m: any) => m.name === 'Fornøjelser'); fun.name = 'Sjov og ballade'; // renamed after the category was hidden
+    expect(hidden.subCategories[0].name).toMatch(/^Fornøjelser ` Hobby ` /);
+    const files = [{ path: 'b.ynab4/Budget.yfull', text: JSON.stringify(y) }]; const dst = memBudget(); applyImport(dst, parseYnab4Native(files), 'fp');
+    // the export shows hidden rows as "Hidden Categories" / "<old group> ` <name> ` <group id>"
+    const csvHidden = lines(budget).map((r, k) => {
+      if (k === 0) return r; const c = r.split('","');
+      if (/"Hobby"/.test(r)) { c[2] = 'Hidden Categories'; c[3] = hidden.subCategories[0].name; } else if (c[2] === 'Fornøjelser') { c[1] = c[1].replace('Fornøjelser', 'Sjov og ballade'); c[2] = 'Sjov og ballade'; }
+      return c.join('","'); }).join('\r\n');
+    expect(failing(compareWithBudgetCsv(dst, csvHidden))).toContain('YNAB4 export: rows matched to imported categories'); // by name alone: the group is now called differently
+    expect(failing(compareWithBudgetCsv(dst, csvHidden, files))).toEqual([]); // by full name via the source: exact
+  });
+  it('rows for a group without categories are accepted only while they carry no values', () => {
+    const { dst, budget } = setup(); const rows = lines(budget);
+    const ok = compareWithBudgetCsv(dst, [...rows, '"January 2025","Tom gruppe: ","Tom gruppe","","kr0,00","kr0,00","kr0,00"'].join('\r\n'));
+    expect(failing(ok)).toEqual([]); expect(ok[0].detail).toMatch(/1 empty group row/);
+    const bad = compareWithBudgetCsv(dst, [...rows, '"January 2025","Tom gruppe: ","Tom gruppe","","kr5,00","kr0,00","kr5,00"'].join('\r\n'));
+    expect(bad[0].status).toBe('FAIL'); expect(bad[0].examples.join()).toMatch(/group row with values/);
+  });
   it('rejects a file that is not a Budget export', () => {
     expect(() => compareWithBudgetCsv(memBudget(), '"Account","Date","Payee"\r\n')).toThrow(/not a YNAB4 Budget export/);
   });

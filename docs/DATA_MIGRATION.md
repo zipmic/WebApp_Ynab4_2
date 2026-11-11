@@ -96,6 +96,7 @@ Payee names differing only in letter case/spacing are merged (15 of 2,350 in the
 | Scheduled transactions, notes, enumerations, unknown fields, internal consistency | PASS |
 | Payees | PARTIAL — 15 case/spacing variants merged |
 | Payee rename rules | PARTIAL — 48 not imported |
+| **Against YNAB4's own Budget export** (`--budget-csv`): budgeted, activity, category balance | **PASS — identical in all 51,770 category-months**, 2014-03 – 2028-01; nothing extra in the import |
 
 Not imported by design (tombstones): 12 accounts, 128 categories, 553 transactions, 197 budget cells, 57 schedules.
 Through the HTTP API (as the wizard sends it, including zip junk): preview 0.9 s, commit 1.0 s, second import refused (`ALREADY_IMPORTED`).
@@ -109,6 +110,12 @@ This adds five areas: rows matched to imported categories (by group + category n
 original names), budgeted amounts, activity (Outflows column — its sign convention is detected from the data and
 stated), category balances, and imported values the export does not list. Examples name CSV line numbers and months
 only. Code: `readYnab4BudgetCsv` (`src/shared/ynab4csv.ts`), `compareWithBudgetCsv` (`src/server/migrationAudit.ts`).
+Observed in a real export (YNAB 4.3, Danish locale): tab-separated, UTF-8 with BOM, month labels like "marts 2014",
+amounts "kr1.234,56" / "-kr12,00", Outflows positive for money out, one row per category per month including zero
+rows. Hidden categories appear under master "Hidden Categories" with the Sub Category "<group name when hidden> `
+<name> ` <group entity id>" — identical to the name in the .ynab4 file, so with the source files they are matched by
+that full name (the group may have been renamed or deleted since). A category group without categories appears as a
+row with an empty Sub Category and zero values; such rows are accepted only while all values are zero.
 
 ## Safeguards
 - Preview = the real import into a throw-away in-memory database, so the user sees the real audit before anything is written.
@@ -125,7 +132,6 @@ budget/tracking inferred (overridable in the wizard), red-arrow settings inferre
 Every category-month is compared with the Budget export.
 
 ## Remaining risks
-1. Month balances are verified by the zero test and internal consistency; the comparison with YNAB4's own figures (`--budget-csv`) is ready but has not yet been run on the owner's export.
-2. `.ydiff` merging is exercised by synthetic tests and by an ordering check on real diffs, but no real budget needing a merge has been imported.
-3. Account types Cash, LineOfCredit, PayPal, MerchantAccount, InvestmentAccount, Mortgage and frequencies not in the list above were never seen in real data.
-4. Split-line transfers and scheduled splits do not occur in the real budget; only synthetic tests cover them.
+1. `.ydiff` merging is exercised by synthetic tests and by an ordering check on real diffs, but no real budget needing a merge has been imported.
+2. Account types Cash, LineOfCredit, PayPal, MerchantAccount, InvestmentAccount, Mortgage and frequencies not in the list above were never seen in real data.
+3. Split-line transfers and scheduled splits do not occur in the real budget; only synthetic tests cover them.

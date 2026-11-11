@@ -262,8 +262,12 @@ export function parseYnab4Csv(input: { register: string; budget?: string | null 
 }
 
 // ------------------------------------------------------------------------------------------- Budget.csv only
-export interface Ynab4BudgetRow { line: number; month: Month; group: string; category: string; hidden: boolean; budgeted: number; outflows: number; balance: number }
-export interface Ynab4BudgetCsv { rows: Ynab4BudgetRow[]; unreadable: { line: number; reason: string }[]; decimal: DecimalStyle }
+export interface Ynab4BudgetRow { line: number; month: Month; group: string; category: string; hidden: boolean; budgeted: number; outflows: number; balance: number;
+  /** the Sub Category text exactly as exported (for hidden categories: "group ` name ` group id", as in the .ynab4 file) */
+  rawCategory: string }
+export interface Ynab4BudgetCsv { rows: Ynab4BudgetRow[]; unreadable: { line: number; reason: string }[]; decimal: DecimalStyle;
+  /** rows YNAB4 writes for a category group that has no categories (empty Sub Category) */
+  groupPlaceholders: Ynab4BudgetRow[] }
 /**
  * Reads a YNAB4 Budget export on its own (no Register needed), for comparing an import with YNAB4's own figures.
  * Hidden categories ("Hidden Categories" / "Group ` Name ` <id>") are returned under their original group and name.
@@ -281,18 +285,19 @@ export function readYnab4BudgetCsv(text: string, decimal: DecimalStyle = 'auto')
     decimal = comma >= dot && comma > 0 ? 'comma' : dot > 0 ? 'dot' : 'auto';
   }
   const amount = (s: string | undefined) => { const t = (s ?? '').trim(); return t ? parseAmount(t, decimal)?.minor ?? null : 0; };
-  const rows: Ynab4BudgetRow[] = [], unreadable: Ynab4BudgetCsv['unreadable'] = [];
+  const rows: Ynab4BudgetRow[] = [], unreadable: Ynab4BudgetCsv['unreadable'] = [], groupPlaceholders: Ynab4BudgetRow[] = [];
   body.forEach((r, i) => {
     const line = i + 2; if (r.every(v => !v.trim())) return;
     const month = parseMonthLabel(r[B.month] ?? ''); if (!month) { unreadable.push({ line, reason: 'unreadable month' }); return; }
     let group = B.master >= 0 ? (r[B.master] ?? '').trim() : '', category = B.sub >= 0 ? (r[B.sub] ?? '').trim() : '';
     if (!group && !category && B.category >= 0) { const full = (r[B.category] ?? '').trim(); const k = full.indexOf(':'); if (k > 0) { group = full.slice(0, k).trim(); category = full.slice(k + 1).trim(); } else category = full; }
     if (/^income$/i.test(group)) return;
-    let hidden = false;
+    let hidden = false; const rawCategory = category;
     if (/^hidden categories$/i.test(group)) { const p = category.split(' ` '); if (p.length >= 3) { group = p[0]; category = p.slice(1, -1).join(' ` '); } else if (p.length === 2) { group = p[0]; category = p[1]; } hidden = true; }
     const budgeted = amount(r[B.budgeted]), outflows = amount(r[B.outflows]), balance = amount(r[B.balance]);
     if (budgeted === null || outflows === null || balance === null) { unreadable.push({ line, reason: 'unreadable amount' }); return; }
-    rows.push({ line, month, group, category, hidden, budgeted, outflows, balance });
+    const row = { line, month, group, category, hidden, budgeted, outflows, balance, rawCategory };
+    if (!category && group && !hidden) groupPlaceholders.push(row); else rows.push(row);
   });
-  return { rows, unreadable, decimal };
+  return { rows, unreadable, decimal, groupPlaceholders };
 }
