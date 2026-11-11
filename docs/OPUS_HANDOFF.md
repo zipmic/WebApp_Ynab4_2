@@ -80,7 +80,7 @@ Work top to bottom unless the owner says otherwise. Each task is small; finish, 
 
 **D2. Off-site backup routine** — *done*: `scripts/backup-now.ts` (`npm run backup`, bundled as `dist/server/backup-now.mjs`), `--copy-to <folder>`, `Core` maintenance mode, retention per backup kind (also fixed: the old retention loop pruned with a double slice). Documented in SECURITY_AND_DEPLOYMENT.md; the cron/timer setup for the chosen host belongs in D1.
 
-**D3. End-user README.md** (what it is, quick start with `npm run dev`, demo data via `scripts/seed-demo.ts`, importing from YNAB4, backups).
+**D3. End-user README.md** — *done* (`README.md`; quick-start and demo commands checked). Update its "Running it for real" section with the host chosen in D1.
 
 ### I — Integrity follow-ups
 **I1. Browser test for two devices** — *done*: step "two devices" in `tests/e2e/run.mjs`. It also found and fixed a bug: a failed write left its optimistic value on screen; `mutate()` in `src/web/lib/store.tsx` now reloads after a failure.
@@ -123,7 +123,7 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 ## 15. Exact next task
-If the owner has provided the YNAB4 export: finish **M1 step 5** (run `npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, report counts only, update the docs). Otherwise continue with **D1** (it needs the owner's hosting choice). I2 needs the owner's approval (it changes a security mechanism and the system schema). If both are open, continue with **D3**, then **U1**.
+If the owner has provided the YNAB4 export: finish **M1 step 5** (run `npm run audit:ynab4 -- <zip> --budget-csv <Budget.csv>`, report counts only, update the docs). Otherwise continue with **D1** (it needs the owner's hosting choice). I2 needs the owner's approval (it changes a security mechanism and the system schema). If both are open, continue with **U1**.
 
 Original M1 plan, for reference (steps 2–4 are done):
 1. Ask the owner for a YNAB4 export of the real budget (YNAB4 → File → Export → both files) and a path where it is stored outside the repository. If they cannot run YNAB4 any more, say so in `docs/PROJECT_STATUS.md`, skip to M3, and leave M1/M2 open.

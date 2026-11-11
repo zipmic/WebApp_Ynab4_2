@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1 (tool part), M3, M4, I1, I3 and D2. Test counts: 114 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1 (tool part), M3, M4, I1, I3, D2 and D3. Test counts: 114 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -53,7 +53,7 @@ Last updated after backlog items M1 (tool part), M3, M4, I1, I3 and D2. Test cou
 ## Missing features (not started)
 Multi-month budget view · drag-and-drop reordering · configurable keyboard shortcuts · PIN lock · database encryption ·
 offline writes · payee rename rules · entering scheduled transactions ahead of time ·
-payee management screen (merge/delete) · README for end users · deployment guide beyond the examples.
+payee management screen (merge/delete) · deployment guide beyond the examples.
 
 ## Architectural risks
 1. **Hosting is undecided.** The probed web space cannot run Node. See SECURITY_AND_DEPLOYMENT.md.
