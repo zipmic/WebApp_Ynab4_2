@@ -73,8 +73,11 @@ Work top to bottom unless the owner says otherwise. Each task is small; finish, 
 - `fixZipName` in `src/web/lib/files.ts`: names decoded by fflate as Latin-1 are re-decoded as UTF-8 when their bytes are valid multi-byte UTF-8 (the macOS case, confirmed on the owner's zip). No CP437 fallback: a correctly decoded "Ø" cannot be distinguished from a CP437 byte, and guessing would damage correct names.
 
 ### D — Deployment (needs owner decision first)
-**D1. Ask the owner which Node-capable host they will use**, then write `docs/DEPLOYMENT_GUIDE.md` with exact steps for that host (install, env file, reverse proxy, first-run token, backups off-site, updates).
-- Accept: the owner can follow it start to finish; `curl -I` shows the security headers; setup requires the token from outside.
+**D1. Deployment guide for the owner's host** — *written, awaiting the owner's first run*: home Windows computer +
+Tailscale (`docs/DEPLOYMENT_GUIDE.md` in Danish, `deploy/windows/*`). Also made the built server production by itself
+(`npm start` used POSIX env syntax) and let settings come from a file (`node --env-file=…`). When the owner reports back,
+fix whatever step failed (the scripts were never run on Windows; Tailscale CLI syntax `tailscale serve --bg 8787` is from
+memory).
 
 **D2. Off-site backup routine** — *done*: `scripts/backup-now.ts` (`npm run backup`, bundled as `dist/server/backup-now.mjs`), `--copy-to <folder>`, `Core` maintenance mode, retention per backup kind (also fixed: the old retention loop pruned with a double slice). Documented in SECURITY_AND_DEPLOYMENT.md; the cron/timer setup for the chosen host belongs in D1.
 
@@ -121,13 +124,9 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 ## 15. Exact next task
-**D1 — deployment guide for the owner's host.** The owner wants to use their own web space ("other npm apps worked
-there"). The earlier probe (`deploy/hostcheck.php`) found no Node.js visible from PHP, which is common when Node apps are
-run through a control-panel feature. Ask the owner: (a) the control panel or hosting provider name, (b) how the other
-npm apps were started there (panel "Node.js app"/Passenger, SSH + pm2, …), (c) whether they have SSH access and can
-create a folder outside the public web root. Then write `docs/DEPLOYMENT_GUIDE.md` for exactly that setup (install,
-env file with BR_DATA_DIR outside the web root, HTTPS, first-run setup token, `node dist/server/backup-now.mjs` on a
-schedule, updates) and update README "Running it for real". Do not start a PHP rewrite.
+1. If the owner reports problems with `docs/DEPLOYMENT_GUIDE.md` on their Windows computer: fix those first (keep the
+   app bound to 127.0.0.1, never suggest `tailscale funnel`, never enable `BR_TRUST_PROXY` for the Tailscale setup).
+2. Otherwise continue with **U1** (multi-month budget view), then the other U items in order.
 
-Owner's answers recorded: hosting = own web space where npm apps have worked; I2 (persistent login throttling) = no
-opinion, leave it (low priority for one user); test-name slip in Git history = leave it.
+Owner's answers recorded: hosting = home Windows computer that is always on, reached via Tailscale; I2 (persistent login
+throttling) = no opinion, leave it; test-name slip in Git history = leave it.

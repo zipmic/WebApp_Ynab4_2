@@ -22,7 +22,7 @@ npm run build && npm run test:e2e   # browser test against the production build
 npm run test:perf      # 51k-transaction benchmark with time limits
 npm run audit:ynab4 -- <.ynab4 folder | zip | Budget.yfull>   # migration audit, prints ids/counts only
 npm run backup -- --copy-to <folder>                       # back up every budget now (cron-safe)
-npm start              # production (after build); see docs/SECURITY_AND_DEPLOYMENT.md
+npm start              # production (after build); settings via `node --env-file=<file> dist/server/index.mjs`
 ```
 
 ## Rules that are not negotiable
@@ -51,3 +51,4 @@ npm start              # production (after build); see docs/SECURITY_AND_DEPLOYM
 - `docs/YNAB4_COMPATIBILITY.md` — feature-by-feature comparison with YNAB4
 - `docs/DATA_MIGRATION.md` — YNAB4 file format as observed, mapping, audit
 - `docs/SECURITY_AND_DEPLOYMENT.md` — authentication, hosting, deployment
+- `docs/DEPLOYMENT_GUIDE.md` — the owner's installation: home Windows computer + Tailscale (Danish)

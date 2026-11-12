@@ -1,6 +1,11 @@
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 
+// The built server (dist/server/index.mjs) always runs in production mode, also when started without NODE_ENV
+// (e.g. on Windows, where "NODE_ENV=production node …" does not work). `npm run dev` runs the sources and is unaffected.
+declare const __PRODUCTION_BUNDLE__: boolean | undefined;
+if (typeof __PRODUCTION_BUNDLE__ !== 'undefined' && __PRODUCTION_BUNDLE__) process.env.NODE_ENV = 'production';
+
 const cfg = loadConfig();
 const app = await buildApp(cfg);
 await app.listen({ host: cfg.host, port: cfg.port });

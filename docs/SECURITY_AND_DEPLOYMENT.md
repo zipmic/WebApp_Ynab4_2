@@ -9,21 +9,32 @@
 **Static hosting alone is not possible**: the browser part is static files, but all data, authentication and
 calculations live in the backend. **PHP-only hosting cannot run it.**
 
-## Hosting decision — PENDING (owner)
-The owner's current web space was probed with `deploy/hostcheck.php`: PHP 8.2 on Apache, HTTPS, pdo_sqlite and
-pdo_mysql available; **no Node.js, no Passenger, no Argon2id in PHP, and no writable folder outside the web root**.
-That host cannot run Budget Reborn as built. The owner has other hosting where Node apps have worked.
+## Hosting decision — home Windows computer + Tailscale (owner's choice)
+The owner's web space (Gigahost, PHP 8.2 on Apache) was probed with `deploy/hostcheck.php`: no Node.js, no Passenger,
+no writable folder outside the web root — it cannot run this backend. The owner chose an always-on Windows computer at
+home, reached from phone and other devices through Tailscale. Guide (Danish): `docs/DEPLOYMENT_GUIDE.md`; files:
+`deploy/windows/` (settings template, start/backup scripts, installer registering two scheduled tasks as SYSTEM, restart script).
 
-Options, in order of recommendation:
-1. **A host/VPS where Node runs** (the place earlier Node apps worked, or any small VPS): nginx/Caddy/Apache as HTTPS reverse proxy → `127.0.0.1:8787`. Files: `deploy/budget-reborn.service`, `deploy/nginx.conf.example`.
-2. **Home device (mini-PC, NAS, Raspberry Pi) reachable only through a VPN** (WireGuard/Tailscale). Most private; set `BR_ALLOWED_NETWORKS`.
-3. **Shared host with a "Node.js app" feature** (cPanel/Passenger): works if native modules can be installed; see `deploy/apache.htaccess.example`.
-4. **PHP rewrite of the backend** — not recommended and not started. It would mean re-implementing and re-verifying the engine, importers and audit in PHP (or keeping two implementations in sync), and on the probed host it would also mean weaker password hashing (bcrypt) and a database inside the web root protected only by `.htaccess`. Discuss with the owner before considering it.
+How that setup stays private and safe:
+- The app listens on `127.0.0.1` only; nothing is reachable from the LAN or the internet. `tailscale serve` (tailnet-only,
+  never `funnel`) terminates HTTPS and forwards to it.
+- `BR_TRUST_PROXY` is **not** set: forwarded headers are ignored, so nothing depends on which headers Tailscale sends.
+  `BR_PUBLIC_ORIGIN` = the tailnet HTTPS name makes the origin check and passkeys work whether or not the Host header is
+  rewritten (covered by a test in `tests/unit/security.test.ts`).
+- Consequences accepted for a single-user tailnet: all requests appear to come from 127.0.0.1, so per-IP throttling is
+  shared (per-account throttling still applies); the session cookie is not marked `Secure` because the app itself sees
+  plain HTTP (the browser only ever uses it over Tailscale's HTTPS or on localhost); first-run setup without token works
+  only for a request addressed to `localhost` — the guide does setup on the computer before Tailscale is configured.
+- Recommended in the guide: BitLocker, a Windows password, two-factor authentication or a passkey in the app.
+
+Other options remain valid for later: a VPS with a reverse proxy (`deploy/budget-reborn.service`,
+`deploy/nginx.conf.example`) or a host with a Node.js app feature. A PHP rewrite is not planned.
 
 ## Running in production
 ```bash
 npm ci && npm run build
 BR_DATA_DIR=/var/lib/budget-reborn BR_TRUST_PROXY=1 BR_REQUIRE_HTTPS=1 BR_PUBLIC_ORIGIN=https://budget.example.com npm start
+# or put the settings in a file outside the app folder:  node --env-file=/etc/budget-reborn.env dist/server/index.mjs
 ```
 All settings: `.env.example`. First start prints a setup token (also in `<data>/setup-token.txt`); the first visit creates the single owner account.
 

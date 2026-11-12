@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/copy-ocr-assets.mjs && vite build && node scripts/build-server.mjs",
-    "start": "NODE_ENV=production node dist/server/index.mjs",
+    "start": "node dist/server/index.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "node tests/e2e/run.mjs",

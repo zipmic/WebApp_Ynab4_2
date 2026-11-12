@@ -188,3 +188,23 @@ describe('deployment hardening options', () => {
     expect(totpVerify(secret, '287082', 59_000)).toBe(1); expect(totpVerify(secret, '287082', 59_000, 1)).toBeNull(); expect(totpVerify(secret, '000000', 59_000)).toBeNull();
   });
 });
+
+describe('home computer behind Tailscale serve (deploy/windows, docs/DEPLOYMENT_GUIDE.md)', () => {
+  // configuration from deploy/windows/budget-reborn.env.example: bound to 127.0.0.1, no proxy trust, public origin = the tailnet HTTPS name
+  const ORIGIN = 'https://hjemme-pc.tail1234.ts.net';
+  it('works whether the proxy keeps the original Host or rewrites it, and still refuses other sites', async () => {
+    const { app } = await testApp({ BR_PUBLIC_ORIGIN: ORIGIN });
+    // first-run setup arriving through the tailnet name needs the token; on the computer itself (localhost) it does not
+    const viaTailnet = await app.inject({ method: 'POST', url: '/api/auth/setup', remoteAddress: '127.0.0.1', headers: { host: 'hjemme-pc.tail1234.ts.net', origin: ORIGIN }, payload: { username: 'owner', password: 'a-long-test-password' } });
+    expect(viaTailnet.json().error.code).toBe('SETUP_TOKEN');
+    expect((await app.inject({ method: 'POST', url: '/api/auth/setup', remoteAddress: '127.0.0.1', headers: { host: 'localhost:8787', origin: 'http://localhost:8787' }, payload: { username: 'owner', password: 'a-long-test-password' } })).statusCode).toBe(200);
+    for (const host of ['hjemme-pc.tail1234.ts.net', '127.0.0.1:8787']) {
+      const login = await app.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '127.0.0.1', headers: { host, origin: ORIGIN, 'x-forwarded-for': '100.101.102.103', 'x-forwarded-proto': 'https' }, payload: { username: 'owner', password: 'a-long-test-password' } });
+      expect(login.statusCode).toBe(200);
+      const h = { host, origin: ORIGIN, cookie: `${login.cookies[0].name}=${login.cookies[0].value}`, 'x-csrf-token': login.json().csrf };
+      expect((await app.inject({ method: 'POST', url: '/api/budgets', remoteAddress: '127.0.0.1', headers: h, payload: { name: 'B' } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: '/api/budgets', remoteAddress: '127.0.0.1', headers: { ...h, origin: 'https://evil.example' }, payload: { name: 'X' } })).json().error.code).toBe('BAD_ORIGIN');
+    }
+    await app.close();
+  });
+});

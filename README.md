@@ -49,15 +49,14 @@ For an extra check against YNAB4's own month figures, export the budget from YNA
 `npm run audit:ynab4 -- "<your .ynab4 folder or zip>" --budget-csv "<…-Budget.csv>"`. It prints counts only.
 
 ## Running it for real
-Budget Reborn needs a machine that can keep a **Node.js** process running (a small VPS, a home server or NAS, or a
-host with a Node.js app feature) and HTTPS in front of it. Ordinary PHP-only web space cannot run it.
-```bash
-npm ci && npm run build
-BR_DATA_DIR=/var/lib/budget-reborn BR_TRUST_PROXY=1 BR_REQUIRE_HTTPS=1 npm start
-```
-All settings are listed in `.env.example`; reverse-proxy and service examples are in `deploy/`; the full guide,
-including off-site backups (`node dist/server/backup-now.mjs --copy-to <folder>`), is
-[docs/SECURITY_AND_DEPLOYMENT.md](docs/SECURITY_AND_DEPLOYMENT.md).
+Budget Reborn needs a machine that can keep a **Node.js** process running. Ordinary PHP-only web space cannot run it.
+- **Home computer + Tailscale (recommended, Windows):** step-by-step guide in Danish:
+  [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md). Scripts in `deploy/windows/` install it as an automatic
+  service with nightly backups; Tailscale gives your phone private HTTPS access without exposing anything to the internet.
+- **Linux server / VPS:** `npm ci && npm run build`, then `node --env-file=<settings file> dist/server/index.mjs` behind an
+  HTTPS reverse proxy (examples in `deploy/`). All settings are listed in `.env.example`; security details and off-site
+  backups (`node dist/server/backup-now.mjs --copy-to <folder>`) are in
+  [docs/SECURITY_AND_DEPLOYMENT.md](docs/SECURITY_AND_DEPLOYMENT.md).
 
 ## Your data
 - Everything stays on your server: one SQLite file per budget in the data folder. Keep that folder out of any web folder.

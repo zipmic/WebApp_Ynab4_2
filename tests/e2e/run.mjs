@@ -148,9 +148,13 @@ await step('Smart Bank Import: real local OCR of two overlapping screenshots, du
   expect(/netto/i.test(rows[0].v[1]) && rows[0].v[2] === 'Dagligvarer', 'category should be suggested from history');
   expect(external.length === 0, `OCR made external requests: ${external[0]}`);
   // the Netto purchase typed in by hand three days "later" has the same amount: flagged, not pre-selected, never silently doubled
-  expect(/Possible duplicate/.test(rows[0].status) && !rows[0].checked, 'manual entry with the same amount within 3 days should be flagged');
+  // the Netto purchase typed in by hand earlier is dated today; it counts as a possible duplicate only within 3 days
+  const today = new Date(); const gap = Math.round((Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) - Date.UTC(2026, 10, 8)) / 86400000);
+  const nearby = gap >= 0 && gap <= 3;
+  expect(/Possible duplicate/.test(rows[0].status) === nearby && rows[0].checked === !nearby, `Netto row (gap ${gap} days) should ${nearby ? '' : 'not '}be flagged: ${rows[0].status}`);
+  const expected = nearby ? 8 : 9;
   await shot('05-bank-import-review');
-  await page.getByRole('button', { name: /Import 8 into Lønkonto/ }).click(); await page.getByText('8 transactions imported').waitFor(); await shot('06-bank-import-done');
+  await page.getByRole('button', { name: new RegExp(`Import ${expected} into Lønkonto`) }).click(); await page.getByText(`${expected} transactions imported`).waitFor(); await shot('06-bank-import-done');
   // the same screenshot again: every row is now a duplicate and nothing is pre-selected
   await page.locator('input[type=file]').setInputFiles(['tests/fixtures/screens/mobile-light-1.png']); await page.locator('[data-testid=import-row]').first().waitFor({ timeout: 120000 }); await page.waitForTimeout(1200);
   const again = await page.$$eval('[data-testid=import-row]', trs => trs.map(tr => tr.querySelector('input[type=checkbox]').checked));

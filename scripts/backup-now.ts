@@ -5,7 +5,7 @@
  *   BR_DATA_DIR=/var/lib/budget-reborn npx tsx scripts/backup-now.ts [--copy-to /mnt/offsite/budget-reborn]
  *
  * Backups are written to <data>/backups/<budget id>/<UTC time>-scheduled.sqlite; the newest BR_BACKUP_KEEP
- * scheduled backups per budget are kept. With --copy-to, each new backup is also copied (as <budget name>-<time>.budgetreborn)
+ * scheduled backups per budget are kept. With --copy-to (or BR_BACKUP_COPY_TO in the environment), each new backup is also copied (as <budget name>-<time>.budgetreborn)
  * to a second location, e.g. a mounted disk or a folder synced off the machine. Exit code 1 if any budget failed.
  * Run it with the same version of the application as the server.
  */
@@ -15,7 +15,8 @@ import { loadConfig } from '../src/server/config.ts';
 import { Core } from '../src/server/core.ts';
 
 const args = process.argv.slice(2); const i = args.indexOf('--copy-to');
-const copyTo = i >= 0 ? args[i + 1] : null;
+// --copy-to on the command line wins over BR_BACKUP_COPY_TO from the env file
+const copyTo = i >= 0 ? args[i + 1] : process.env.BR_BACKUP_COPY_TO?.trim() || null;
 if ((i >= 0 && !copyTo) || args.some((a, k) => a !== '--copy-to' && k !== i + 1)) { console.error('usage: npx tsx scripts/backup-now.ts [--copy-to <folder>]'); process.exit(2); }
 const core = new Core(loadConfig(), { maintenance: true });
 let failed = 0; const budgets = core.listBudgets();

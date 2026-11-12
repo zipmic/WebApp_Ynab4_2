@@ -6,6 +6,8 @@ await build({
   outdir: 'dist/server', outExtension: { '.js': '.mjs' },
   bundle: true, platform: 'node', format: 'esm', target: 'node20', sourcemap: true,
   external: ['better-sqlite3', '@node-rs/argon2'],
+  // the bundle is always the production server, also when started without NODE_ENV (e.g. on Windows)
+  define: { __PRODUCTION_BUNDLE__: 'true' },
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
 });
 console.log('server bundle written to dist/server/index.mjs (and dist/server/backup-now.mjs)');
