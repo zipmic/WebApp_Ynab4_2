@@ -33,7 +33,7 @@ Det tager ca. 30–45 minutter første gang. Kommandoerne skrives i **PowerShell
 ## 2. Hent og byg appen
 ```powershell
 New-Item -ItemType Directory -Force C:\BudgetReborn
-git clone -b claude/compassionate-knuth-trbgex https://github.com/zipmic/WebApp_Ynab4_2.git C:\BudgetReborn\app
+git clone -b main https://github.com/zipmic/WebApp_Ynab4_2.git C:\BudgetReborn\app
 cd C:\BudgetReborn\app
 npm ci
 npm run build
