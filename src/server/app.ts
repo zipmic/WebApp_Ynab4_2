@@ -64,6 +64,16 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
    * proxy every visitor arrives from 127.0.0.1, so the request must also be addressed to localhost and carry no
    * proxy headers, and the exemption is off entirely once the installation is configured for proxy/HTTPS use.
    */
+  /**
+   * A request made on the server computer itself, straight to the app (not through a proxy): socket from loopback,
+   * addressed to localhost, and without any proxy header. Used for the one thing that must work before a second
+   * factor exists when BR_REQUIRE_2FA is on: password sign-in on the computer itself, to set the second factor up.
+   */
+  const isDirectLocal = (req: FastifyRequest) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')
+    && /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(req.headers.host ?? '')
+    && !['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip', 'via'].some(h => req.headers[h] !== undefined);
+  const passkeyCount = (userId: string) => (core.sys.prepare('SELECT COUNT(*) n FROM passkeys WHERE user_id=?').get(userId) as { n: number }).n;
+  const SECOND_FACTOR_NEEDED = 'Two-factor sign-in is required on this server. On the computer that runs Budget Reborn, open http://localhost:8787, sign in, and turn on two-factor authentication or add a passkey under Settings → Security.';
   const isLoopback = (req: FastifyRequest) => !cfg.trustProxy && !cfg.requireHttps && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip)
     && /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(req.headers.host ?? '')
     && !['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip', 'via'].some(h => req.headers[h] !== undefined);
@@ -123,7 +133,7 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     const u = req.session ? auth.user(req.session.userId) : null;
     return { setupRequired: !auth.hasUser(), setupNeedsToken: !auth.hasUser() && !isLoopback(req), authenticated: !!u, csrf: req.session?.csrf ?? null,
       user: u ? { username: u.username, totpEnabled: !!u.totp_enabled, passkeys: (core.sys.prepare('SELECT COUNT(*) n FROM passkeys WHERE user_id=?').get(u.id) as { n: number }).n } : null,
-      passkeyLogin: !!core.sys.prepare('SELECT 1 FROM passkeys LIMIT 1').get(), visionConfigured: !!cfg.vision, version: 1 };
+      passkeyLogin: !!core.sys.prepare('SELECT 1 FROM passkeys LIMIT 1').get(), visionConfigured: !!cfg.vision, twoFactorRequired: cfg.require2fa, version: 1 };
   });
   app.post('/api/auth/setup', async (req, reply) => {
     const b = z.object({ username: z.string().max(64), password: z.string().max(256), token: z.string().max(100).optional() }).parse(req.body);
@@ -142,6 +152,10 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     if (u.totp_enabled) {
       if (!b.totp) return reply.code(401).send({ error: { code: 'TOTP_REQUIRED', message: 'Enter the 6-digit code from your authenticator app.' } });
       if (!auth.totpCheck(u, b.totp)) { fail('login_totp_failed'); throw new AppError(401, 'TOTP_INVALID', 'That code is not valid.'); }
+    } else if (cfg.require2fa && !isDirectLocal(req)) {
+      // correct password, but a password alone is not enough on this server (passkey sign-in is the other way in)
+      auth.audit('login_second_factor_missing', req.ip, key);
+      throw new AppError(403, 'SECOND_FACTOR_REQUIRED', SECOND_FACTOR_NEEDED);
     }
     auth.userThrottle.success(key); auth.audit('login', req.ip, key);
     return { ok: true, csrf: setSession(req, reply, u.id) };
@@ -159,11 +173,17 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
   app.post('/api/auth/totp/disable', async req => {
     const b = z.object({ password: z.string().max(512) }).parse(req.body); const u = auth.user(uid(req))!;
     if (!(await auth.verifyPassword(u.username, b.password))) throw new AppError(403, 'WRONG_PASSWORD', 'Password is incorrect.');
+    if (cfg.require2fa && passkeyCount(u.id) === 0) throw new AppError(409, 'SECOND_FACTOR_REQUIRED', 'Two-factor sign-in is required on this server. Add a passkey before turning the authenticator code off.');
     auth.totpDisable(u.id); auth.audit('totp_disabled', req.ip); return { ok: true };
   });
   // --- passkeys (WebAuthn)
   app.get('/api/auth/passkeys', async req => core.sys.prepare('SELECT id, name, created_at createdAt FROM passkeys WHERE user_id=?').all(uid(req)));
-  app.delete('/api/auth/passkeys/:id', async req => { core.sys.prepare('DELETE FROM passkeys WHERE id=? AND user_id=?').run((req.params as any).id, uid(req)); return { ok: true }; });
+  app.delete('/api/auth/passkeys/:id', async req => {
+    const u = auth.user(uid(req))!;
+    const owns = core.sys.prepare('SELECT 1 FROM passkeys WHERE id=? AND user_id=?').get((req.params as any).id, u.id);
+    if (owns && cfg.require2fa && !u.totp_enabled && passkeyCount(u.id) <= 1) throw new AppError(409, 'SECOND_FACTOR_REQUIRED', 'Two-factor sign-in is required on this server. Turn on the authenticator code before removing your last passkey.');
+    core.sys.prepare('DELETE FROM passkeys WHERE id=? AND user_id=?').run((req.params as any).id, u.id); return { ok: true };
+  });
   app.post('/api/auth/passkey/register-options', async req => {
     const u = auth.user(uid(req))!; const { rpID } = rp(req);
     const existing = core.sys.prepare('SELECT id FROM passkeys WHERE user_id=?').all(u.id) as { id: string }[];

@@ -107,7 +107,7 @@ export const BUDGET_MIGRATIONS: string[] = [
 const UNDO_TABLES = ['accounts', 'category_groups', 'categories', 'payees', 'transactions', 'monthly_budgets',
   'month_notes', 'scheduled', 'reconciliations', 'payee_rules', 'meta'];
 
-const SYSTEM_MIGRATIONS: string[] = [
+export const SYSTEM_MIGRATIONS: string[] = [
   `
   CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE users(
@@ -123,7 +123,13 @@ const SYSTEM_MIGRATIONS: string[] = [
   CREATE TABLE budgets(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, last_opened TEXT);
   CREATE TABLE audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, event TEXT NOT NULL, ip TEXT, detail TEXT);
   `,
+  // v2: login throttling survives a restart (an attacker cannot reset a lockout by making the server restart)
+  `
+  CREATE TABLE throttle(kind TEXT NOT NULL, key TEXT NOT NULL, fails INTEGER NOT NULL, first INTEGER NOT NULL,
+    locked_until INTEGER NOT NULL, strikes INTEGER NOT NULL, PRIMARY KEY(kind, key));
+  `,
 ];
+export const SYSTEM_SCHEMA_VERSION = SYSTEM_MIGRATIONS.length;
 
 /**
  * Applies pending migrations, each in its own transaction together with its version bump: a migration either
@@ -161,7 +167,7 @@ export function openBudgetDb(file: string, migrations: string[] = BUDGET_MIGRATI
 }
 export function openSystemDb(file: string): DB {
   const db = open(file);
-  migrate(db, SYSTEM_MIGRATIONS);
+  try { migrate(db, SYSTEM_MIGRATIONS, file); } catch (e) { db.close(); throw e; }
   return db;
 }
 

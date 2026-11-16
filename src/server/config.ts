@@ -2,6 +2,13 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const bool = (v: string | undefined, d: boolean) => (v === undefined || v === '' ? d : /^(1|true|yes|on)$/i.test(v));
+function proxyTrust(v: string | undefined): false | string {
+  const t = (v ?? '').trim();
+  if (!t || /^(0|false|no|off)$/i.test(t)) return false;
+  if (/^(1|true|yes|on)$/i.test(t)) return 'loopback';
+  if (!/^[0-9a-fA-F.:/,\s]+$|^(loopback|linklocal|uniquelocal)(\s*,\s*[0-9a-zA-Z.:/]+)*$/.test(t)) throw new Error(`BR_TRUST_PROXY must be 1 (proxy on this machine) or a list of proxy addresses, not "${t}"`);
+  return t;
+}
 const int = (v: string | undefined, d: number) => (v && /^\d+$/.test(v) ? Number(v) : d);
 
 export interface Config {
@@ -9,7 +16,14 @@ export interface Config {
   /** redirect/deny plain HTTP and mark cookies Secure */
   requireHttps: boolean;
   /** trust X-Forwarded-* from a reverse proxy (needed for HTTPS detection and client IPs behind nginx/Apache/Caddy) */
-  trustProxy: boolean;
+  /**
+   * Which proxy addresses may set X-Forwarded-*: false, or a proxy-addr list such as 'loopback' or '10.0.0.5,10.0.0.0/8'.
+   * BR_TRUST_PROXY=1 means a reverse proxy on THIS machine ('loopback'). Never trust every hop: a client could then
+   * choose its own address by sending X-Forwarded-For and slip past the per-IP login throttle.
+   */
+  trustProxy: false | string;
+  /** login only with a second factor (TOTP code or passkey) — for servers reachable from the internet */
+  require2fa: boolean;
   /** if set, only these client addresses/prefixes may connect (VPN-only deployments), e.g. "10.8.0.,127.0.0.1,100.64." */
   allowedNetworks: string[];
   sessionIdleMinutes: number; sessionMaxDays: number;
@@ -26,7 +40,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     production, host: env.BR_HOST ?? '127.0.0.1', port: int(env.BR_PORT ?? env.PORT, 8787), dataDir,
     webDir: resolve(env.BR_WEB_DIR ?? './dist/web'),
-    requireHttps: bool(env.BR_REQUIRE_HTTPS, false), trustProxy: bool(env.BR_TRUST_PROXY, false),
+    requireHttps: bool(env.BR_REQUIRE_HTTPS, false), trustProxy: proxyTrust(env.BR_TRUST_PROXY), require2fa: bool(env.BR_REQUIRE_2FA, false),
     allowedNetworks: (env.BR_ALLOWED_NETWORKS ?? '').split(',').map(s => s.trim()).filter(Boolean),
     sessionIdleMinutes: int(env.BR_SESSION_IDLE_MINUTES, 60 * 24 * 7), sessionMaxDays: int(env.BR_SESSION_MAX_DAYS, 30),
     publicOrigin: env.BR_PUBLIC_ORIGIN?.replace(/\/$/, '') || null,

@@ -4,7 +4,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { spawnSync } from 'node:child_process'; import { tmpdir } from 'node:os'; import { join } from 'node:path';
 import type { App } from '../../src/server/app.ts';
 import { BudgetService } from '../../src/server/budgetService.ts';
-import { BUDGET_MIGRATIONS, BUDGET_SCHEMA_VERSION, openBudgetDb } from '../../src/server/db.ts';
+import { BUDGET_MIGRATIONS, BUDGET_SCHEMA_VERSION, openBudgetDb, openSystemDb, SYSTEM_MIGRATIONS, SYSTEM_SCHEMA_VERSION } from '../../src/server/db.ts';
+const SYSTEM_MIGRATIONS_V1 = (): string => SYSTEM_MIGRATIONS[0];
 import { applyImport } from '../../src/server/importService.ts';
 import { auditNativeImport, compareWithBudgetCsv, verdictOf } from '../../src/server/migrationAudit.ts';
 import { exportYnab4Csv } from '../fixtures/ynab4csv.ts';
@@ -113,6 +114,16 @@ describe('schema upgrades', () => {
     expect(db.pragma('user_version', { simple: true })).toBe(1); expect((db.prepare('SELECT SUM(amount) s FROM transactions').get() as any).s).toBe(487655);
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE name='half_done'`).get()).toBeUndefined(); expect(db.pragma('integrity_check', { simple: true })).toBe('ok'); db.close();
     const ok = new BudgetService(openBudgetDb(file), 'x'); expect(ok.listAccounts()[0].balance).toBe(487655); ok.db.close(); // the real upgrade still works afterwards
+  });
+  it('system database v1 → v2 (persistent login throttling): login and sessions kept, safety copy written', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'br-sys-')); const file = join(dir, 'system.sqlite');
+    const db = new Database(file); db.pragma('journal_mode = WAL'); db.exec(SYSTEM_MIGRATIONS_V1()); db.pragma('user_version = 1');
+    db.exec(`INSERT INTO users(id,username,password_hash,created_at) VALUES('u1','owner','$argon2id$fake','x'); INSERT INTO sessions(token_hash,user_id,csrf,created_at,last_seen) VALUES('h','u1','c',1,1);`); db.close();
+    const up = openSystemDb(file);
+    expect(up.pragma('user_version', { simple: true })).toBe(SYSTEM_SCHEMA_VERSION);
+    expect(up.prepare('SELECT username FROM users').get()).toEqual({ username: 'owner' }); expect((up.prepare('SELECT COUNT(*) n FROM sessions').get() as any).n).toBe(1);
+    up.prepare(`INSERT INTO throttle(kind,key,fails,first,locked_until,strikes) VALUES('ip','x',1,1,0,0)`).run(); up.close();
+    expect(existsSync(`${file}.pre-v${SYSTEM_SCHEMA_VERSION}.bak`)).toBe(true);
   });
   it('a database from a NEWER application version is refused instead of being damaged', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'br-mig-')), 'b.sqlite'); v1Budget(file);

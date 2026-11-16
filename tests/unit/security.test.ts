@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PUBLIC_ROUTES, type App } from '../../src/server/app.ts';
+import { buildApp, PUBLIC_ROUTES, type App } from '../../src/server/app.ts';
+import { loadConfig } from '../../src/server/config.ts';
 import { Throttle, totpCode, totpVerify, base32Encode, base32Decode } from '../../src/server/auth.ts';
 import { generateBudget } from '../fixtures/generate.ts';
 import { login, testApp } from './helpers.ts';
@@ -206,5 +207,75 @@ describe('home computer behind Tailscale serve (deploy/windows, docs/DEPLOYMENT_
       expect((await app.inject({ method: 'POST', url: '/api/budgets', remoteAddress: '127.0.0.1', headers: { ...h, origin: 'https://evil.example' }, payload: { name: 'X' } })).json().error.code).toBe('BAD_ORIGIN');
     }
     await app.close();
+  });
+});
+
+describe('server open to the internet behind a local reverse proxy (Caddy) with BR_REQUIRE_2FA', () => {
+  const ORIGIN = 'https://budget.example.dk';
+  const env = { BR_TRUST_PROXY: '1', BR_REQUIRE_2FA: '1', BR_PUBLIC_ORIGIN: ORIGIN };
+  // what Caddy forwards: the original Host, and X-Forwarded-For with the real client address last
+  const viaProxy = (client: string, extra: Record<string, string> = {}) => ({ remoteAddress: '127.0.0.1', headers: { host: 'budget.example.dk', origin: ORIGIN, 'x-forwarded-for': client, 'x-forwarded-proto': 'https', ...extra } });
+  const onTheComputer = { remoteAddress: '127.0.0.1', headers: { host: 'localhost:8787', origin: 'http://localhost:8787' } };
+  const PW = 'a-long-test-password';
+
+  it('a client cannot choose its own address: spoofed X-Forwarded-For values do not escape the IP lockout', async () => {
+    const { app } = await testApp({ BR_TRUST_PROXY: '1' });
+    const codes: number[] = [];
+    for (let i = 0; i < 12; i++) codes.push((await app.inject({ method: 'POST', url: '/api/auth/login', ...viaProxy(`6.6.6.${i}, 203.0.113.9`), payload: { username: `nobody${i}`, password: 'x' } })).statusCode);
+    expect(codes.slice(0, 10).every(c => c === 401)).toBe(true); expect(codes.slice(10)).toEqual([429, 429]);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login', ...viaProxy('203.0.113.10'), payload: { username: 'nobody', password: 'x' } })).statusCode).toBe(401); // another real client is not affected
+    await app.close();
+  });
+  it('lockouts survive a server restart', async () => {
+    const { app, dir } = await testApp(); await login(app);
+    for (let i = 0; i < 5; i++) await app.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '198.51.100.1', payload: { username: 'owner', password: 'wrong' } });
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '198.51.100.2', payload: { username: 'owner', password: PW } })).statusCode).toBe(429);
+    await app.close();
+    const again = await buildApp(loadConfig({ BR_DATA_DIR: dir } as any));
+    expect((await again.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '198.51.100.3', payload: { username: 'owner', password: PW } })).statusCode).toBe(429);
+    await again.close();
+  });
+  it('with BR_REQUIRE_2FA a password alone works only on the computer itself, until a second factor exists', async () => {
+    const { app } = await testApp(env);
+    // first-run setup through the proxy needs the token (as always with a proxy); it signs in once to set up the second factor
+    const setup = await app.inject({ method: 'POST', url: '/api/auth/setup', ...viaProxy('203.0.113.9'), payload: { username: 'owner', password: PW, token: app.core.auth.setupToken() } });
+    expect(setup.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/auth/status' })).json().twoFactorRequired).toBe(true);
+    const pw = (o: object) => app.inject({ method: 'POST', url: '/api/auth/login', ...o, payload: { username: 'owner', password: PW } } as any);
+    const remote = await pw(viaProxy('203.0.113.9'));
+    expect(remote.statusCode).toBe(403); expect(remote.json().error.code).toBe('SECOND_FACTOR_REQUIRED'); expect(remote.headers['set-cookie']).toBeUndefined();
+    // things that must NOT count as "on the computer": proxied requests claiming localhost, non-loopback sockets, forwarded headers
+    expect((await pw({ remoteAddress: '127.0.0.1', headers: { host: 'localhost:8787', 'x-forwarded-for': '203.0.113.9' } })).statusCode).toBe(403);
+    expect((await pw({ remoteAddress: '127.0.0.1', headers: { host: 'localhost', via: '1.1 caddy' } })).statusCode).toBe(403);
+    expect((await pw({ remoteAddress: '192.168.1.20', headers: { host: 'localhost:8787' } })).statusCode).toBe(403);
+    expect((await pw(viaProxy('127.0.0.1'))).statusCode).toBe(403);
+    // on the computer itself: allowed, so the owner can never lock themselves out before setting up the second factor
+    const local = await pw(onTheComputer); expect(local.statusCode).toBe(200);
+    const h = { ...onTheComputer.headers, cookie: `${local.cookies[0].name}=${local.cookies[0].value}`, 'x-csrf-token': local.json().csrf };
+    const { secret } = (await app.inject({ method: 'POST', url: '/api/auth/totp/begin', remoteAddress: '127.0.0.1', headers: h })).json();
+    const step = Math.floor(Date.now() / 30000);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/totp/enable', remoteAddress: '127.0.0.1', headers: h, payload: { code: totpCode(secret, step - 1) } })).statusCode).toBe(200);
+    // now from the internet: password + code
+    expect((await pw(viaProxy('203.0.113.9'))).json().error.code).toBe('TOTP_REQUIRED');
+    const ok = await app.inject({ method: 'POST', url: '/api/auth/login', ...viaProxy('203.0.113.9'), payload: { username: 'owner', password: PW, totp: totpCode(secret, step) } });
+    expect(ok.statusCode).toBe(200); expect(String(ok.headers['set-cookie'])).toMatch(/^__Host-br_session=.*Secure/); // HTTPS seen through the trusted proxy
+    // the last second factor cannot be removed while it is required
+    const dis = await app.inject({ method: 'POST', url: '/api/auth/totp/disable', remoteAddress: '127.0.0.1', headers: h, payload: { password: PW } });
+    expect(dis.statusCode).toBe(409); expect(dis.json().error.code).toBe('SECOND_FACTOR_REQUIRED');
+    app.core.sys.prepare(`INSERT INTO passkeys(id,user_id,public_key,counter,transports,name,created_at) VALUES('pk1',(SELECT id FROM users),x'00',0,'[]','phone','x')`).run();
+    expect((await app.inject({ method: 'POST', url: '/api/auth/totp/disable', remoteAddress: '127.0.0.1', headers: h, payload: { password: PW } })).statusCode).toBe(200); // a passkey remains
+    expect((await app.inject({ method: 'DELETE', url: '/api/auth/passkeys/pk1', remoteAddress: '127.0.0.1', headers: h })).json().error.code).toBe('SECOND_FACTOR_REQUIRED');
+    await app.close();
+  });
+  it('without BR_REQUIRE_2FA nothing changes', async () => {
+    const { app } = await testApp({ BR_TRUST_PROXY: '1' }); await app.inject({ method: 'POST', url: '/api/auth/setup', ...viaProxy('203.0.113.9'), payload: { username: 'owner', password: PW, token: app.core.auth.setupToken() } });
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login', ...viaProxy('203.0.113.9'), payload: { username: 'owner', password: PW } })).statusCode).toBe(200);
+    await app.close();
+  });
+  it('BR_TRUST_PROXY accepts 1 or explicit proxy addresses and refuses anything else', () => {
+    expect(loadConfig({ BR_DATA_DIR: '/tmp/br-cfg', BR_TRUST_PROXY: '1' } as any).trustProxy).toBe('loopback');
+    expect(loadConfig({ BR_DATA_DIR: '/tmp/br-cfg', BR_TRUST_PROXY: '10.0.0.5, 10.1.0.0/16' } as any).trustProxy).toBe('10.0.0.5, 10.1.0.0/16');
+    expect(loadConfig({ BR_DATA_DIR: '/tmp/br-cfg' } as any).trustProxy).toBe(false);
+    expect(() => loadConfig({ BR_DATA_DIR: '/tmp/br-cfg', BR_TRUST_PROXY: 'everyone' } as any)).toThrow(/BR_TRUST_PROXY/);
   });
 });

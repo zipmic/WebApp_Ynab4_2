@@ -78,7 +78,10 @@ export function Shell({ status, budgets, onSwitch }: { status: Status; budgets: 
           <IconBtn title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setCollapsed(c => !c)}>{collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}</IconBtn>
         </div>
       </aside>}
-      <main className={cx('flex min-w-0 flex-1 flex-col', mobile && 'pb-[calc(56px+env(safe-area-inset-bottom))]')}><Suspense fallback={<div className="p-8 text-ink-3">Loading…</div>}>{content}</Suspense></main>
+      <main className={cx('flex min-w-0 flex-1 flex-col', mobile && 'pb-[calc(56px+env(safe-area-inset-bottom))]')}>
+        {status.twoFactorRequired && status.user && !status.user.totpEnabled && status.user.passkeys === 0 && page !== 'settings' && <a href="#/settings" data-testid="2fa-banner"
+          className="flex items-center gap-2 border-b border-neg bg-neg-soft px-4 py-2 text-[13px] font-medium text-neg md:px-6">This server requires two-factor sign-in. Turn it on now under Settings → Security — until then you can only sign in on this computer. →</a>}
+        <Suspense fallback={<div className="p-8 text-ink-3">Loading…</div>}>{content}</Suspense></main>
       {mobile && <nav className="safe-b fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur">
         <div className="grid h-14 grid-cols-5 items-center">
           <Tab to="budget" active={page === 'budget'} icon={<LayoutList size={20} />} label="Budget" />

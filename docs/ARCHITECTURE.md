@@ -47,7 +47,7 @@ A single Node process serves the built frontend (`dist/web`) and the JSON API. T
 
 ## Data directory (never inside a web-served folder)
 ```
-<BR_DATA_DIR>/system.sqlite            users, sessions, passkeys, budgets registry, audit log
+<BR_DATA_DIR>/system.sqlite            users, sessions, passkeys, budgets registry, audit log, login throttling (schema v2)
 <BR_DATA_DIR>/budgets/<id>.sqlite      one file per budget (+ -wal/-shm, + <file>.pre-v<N>.bak before a schema upgrade)
 <BR_DATA_DIR>/backups/<id>/<UTC>-<reason>.sqlite
 <BR_DATA_DIR>/tmp/                     upload staging, emptied at start

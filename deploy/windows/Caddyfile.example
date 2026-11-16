@@ -1,0 +1,14 @@
+# Caddy - HTTPS foran Budget Reborn. Kopier til C:\BudgetReborn\Caddyfile og ret domænet.
+# Caddy henter og fornyer selv et gratis certifikat (Let's Encrypt) og sender http:// videre til https://.
+# Kun dette domæne besvares; besøg direkte på din IP-adresse får intet svar.
+
+budget.DITDOMAENE.dk {
+	reverse_proxy 127.0.0.1:8787
+	encode zstd gzip
+	log {
+		output file C:/BudgetReborn/logs/caddy.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

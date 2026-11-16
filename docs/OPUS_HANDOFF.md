@@ -73,11 +73,11 @@ Work top to bottom unless the owner says otherwise. Each task is small; finish, 
 - `fixZipName` in `src/web/lib/files.ts`: names decoded by fflate as Latin-1 are re-decoded as UTF-8 when their bytes are valid multi-byte UTF-8 (the macOS case, confirmed on the owner's zip). No CP437 fallback: a correctly decoded "Ø" cannot be distinguished from a CP437 byte, and guessing would damage correct names.
 
 ### D — Deployment (needs owner decision first)
-**D1. Deployment guide for the owner's host** — *written, awaiting the owner's first run*: home Windows computer +
-Tailscale (`docs/DEPLOYMENT_GUIDE.md` in Danish, `deploy/windows/*`). Also made the built server production by itself
-(`npm start` used POSIX env syntax) and let settings come from a file (`node --env-file=…`). When the owner reports back,
-fix whatever step failed (the scripts were never run on Windows; Tailscale CLI syntax `tailscale serve --bg 8787` is from
-memory).
+**D1. Deployment guide for the owner's host** — *written, awaiting the owner's first run*: home Windows computer with a
+fixed IP and an open port behind Caddy (`docs/DEPLOYMENT_GUIDE.md` 6A, `deploy/windows/*`, `install-caddy.ps1`), with
+Tailscale (6B) as documented alternative. Security added for the open port: proxy trust limited to loopback (a real
+spoofing hole, fixed), `BR_REQUIRE_2FA`, persistent lockouts (I2). The Windows scripts, Caddy and the Tailscale CLI step
+were never run here; fix whatever the owner reports.
 
 **D2. Off-site backup routine** — *done*: `scripts/backup-now.ts` (`npm run backup`, bundled as `dist/server/backup-now.mjs`), `--copy-to <folder>`, `Core` maintenance mode, retention per backup kind (also fixed: the old retention loop pruned with a double slice). Documented in SECURITY_AND_DEPLOYMENT.md; the cron/timer setup for the chosen host belongs in D1.
 
@@ -85,7 +85,7 @@ memory).
 
 ### I — Integrity follow-ups
 **I1. Browser test for two devices** — *done*: step "two devices" in `tests/e2e/run.mjs`. It also found and fixed a bug: a failed write left its optimistic value on screen; `mutate()` in `src/web/lib/store.tsx` now reloads after a failure.
-**I2. Persist login throttling** in `system.sqlite` (table `throttle(key, fails, first, locked_until, strikes)`), same behaviour as `Throttle`. Accept: lockout survives a restart (unit test).
+**I2. Persist login throttling** — *done* (owner approved with the open-port decision): system schema v2 table `throttle`, `Throttle` with a database store; upgrade test.
 **I3. Restore from JSON export** — *done*: `Core.restoreJson` (`src/server/core.ts`); `POST /api/restore` accepts either a `.budgetreborn` backup or the JSON export (detected by content). Unknown tables/fields are refused as "newer version" rather than dropped.
 
 ### U — UI and features (routine)
@@ -124,9 +124,10 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 ## 15. Exact next task
-1. If the owner reports problems with `docs/DEPLOYMENT_GUIDE.md` on their Windows computer: fix those first (keep the
-   app bound to 127.0.0.1, never suggest `tailscale funnel`, never enable `BR_TRUST_PROXY` for the Tailscale setup).
+1. If the owner reports problems with `docs/DEPLOYMENT_GUIDE.md` on their Windows computer: fix those first. Keep the app
+   bound to 127.0.0.1, never forward port 8787, keep `BR_REQUIRE_2FA=1` for the open port, never trust all proxy hops,
+   never suggest `tailscale funnel`, and do not set `BR_TRUST_PROXY` for the Tailscale variant.
 2. Otherwise continue with **U1** (multi-month budget view), then the other U items in order.
 
-Owner's answers recorded: hosting = home Windows computer that is always on, reached via Tailscale; I2 (persistent login
-throttling) = no opinion, leave it; test-name slip in Git history = leave it.
+Owner's answers recorded: hosting = home Windows computer that is always on, fixed IP, open port, sign-in only for the
+owner (→ required 2FA, I2 done); test-name slip in Git history = leave it.

@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1, M2, M3, M4, I1, I3, D1, D2 and D3. Test counts: 120 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after backlog items M1, M2, M3, M4, I1, I2, I3, D1, D2 and D3. Test counts: 126 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
 
 ## Completed and verified
 | Area | Verified by |
@@ -24,6 +24,7 @@ Last updated after backlog items M1, M2, M3, M4, I1, I3, D1, D2 and D3. Test cou
 | Scheduled/off-site backups: `scripts/backup-now.ts` (bundled as `dist/server/backup-now.mjs`), safe next to a running server, retention per kind (D2) | unit tests: live server untouched, copies restorable, retention keeps manual/safety backups |
 | Restore from the JSON export as a new budget (validated row by row, one transaction, consistency check; newer/foreign/damaged files refused) (I3) | unit/API tests: identical round trip, 8 rejection cases |
 | Authentication: setup, Argon2id, TOTP, sessions, CSRF, throttling, HTTPS/VPN options, 401 on all private routes | unit tests |
+| Open-port hardening: proxy trust limited to loopback (spoofed X-Forwarded-For fixed), required second factor (`BR_REQUIRE_2FA`), persistent lockouts (I2, system schema v2) | unit tests incl. spoofing, restart and "pretend to be local" cases; system v1→v2 upgrade test |
 | Passkeys | browser test with a virtual authenticator (not with a physical device) |
 | Smart Bank Import: local OCR, CSV, JSON schema, suggestions, duplicate detection, atomic commit, learned corrections | unit tests + browser test with real OCR on synthetic screenshots |
 | UI: budget, register, reports, schedules, settings, wizards, phone layout, dark mode | browser test + screenshots |
@@ -37,7 +38,7 @@ Last updated after backlog items M1, M2, M3, M4, I1, I3, D1, D2 and D3. Test cou
 | Uncategorised-transaction rule, reconciliation-adjustment category | assumed YNAB4 behaviour |
 | External vision provider | mock only |
 | Passkeys on real devices, TOTP with a real authenticator app | not tried |
-| Home Windows deployment (D1: `deploy/windows/*`, `docs/DEPLOYMENT_GUIDE.md`) | app behaviour behind Tailscale covered by a unit test; env-file parsing and the production bundle tested on Linux; **the PowerShell/batch scripts and Tailscale steps have not been run on a real Windows computer** (no Windows or tailscale.com access from the build environment) |
+| Home Windows deployment (D1: `deploy/windows/*` incl. Caddy for the open port, `docs/DEPLOYMENT_GUIDE.md`) | app behaviour behind Caddy and Tailscale covered by unit tests; **Caddy itself not run** (download not permitted in the build environment); env-file parsing and the production bundle tested on Linux; **the PowerShell/batch scripts and Tailscale steps have not been run on a real Windows computer** (no Windows or tailscale.com access from the build environment) |
 | Deployment behind a real reverse proxy (VPS) | configuration examples only; never deployed |
 | Service worker / installable PWA | registered in production builds; not tested on phones |
 | Report figures | not compared with YNAB4's reports |
@@ -56,7 +57,7 @@ offline writes · payee rename rules · entering scheduled transactions ahead of
 payee management screen (merge/delete) · deployment guide beyond the examples.
 
 ## Architectural risks
-1. **Deployment untried on the target machine.** The owner chose a home Windows computer + Tailscale; the scripts are written and partly tested but not yet run there.
+1. **Deployment untried on the target machine.** The owner chose a home Windows computer with a fixed IP and an open port (Caddy, required 2FA); the scripts are written and partly tested but not yet run there.
 2. Single process, single SQLite writer: fine for one household; do not run two server instances on one data directory.
 3. Coarse concurrency control: any change elsewhere rejects the next write from a stale device (by design).
 4. The engine's reference twin in `migrationAudit.ts` must be kept in step deliberately.

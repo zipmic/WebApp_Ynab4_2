@@ -44,31 +44,50 @@ export function totpVerify(secret: string, code: string, now = Date.now(), lastS
 
 // ------------------------------------------------------------------ throttling
 interface Bucket { fails: number; first: number; lockedUntil: number; strikes: number }
+/**
+ * Failed-attempt counter with exponential lockout. With a database it is persistent, so restarting the server does not
+ * lift a lockout; without one (tests) it lives in memory.
+ */
 export class Throttle {
   private buckets = new Map<string, Bucket>();
-  constructor(private maxFails: number, private windowMs: number, private baseLockMs: number, private maxLockMs: number) {}
+  constructor(private maxFails: number, private windowMs: number, private baseLockMs: number, private maxLockMs: number, private store?: { db: DB; kind: string }) {}
+  private get(key: string): Bucket | undefined {
+    if (!this.store) return this.buckets.get(key);
+    const r = this.store.db.prepare('SELECT fails, first, locked_until lockedUntil, strikes FROM throttle WHERE kind=? AND key=?').get(this.store.kind, key) as Bucket | undefined;
+    return r;
+  }
+  private put(key: string, b: Bucket) {
+    if (!this.store) { this.buckets.set(key, b); return; }
+    this.store.db.prepare('INSERT INTO throttle(kind,key,fails,first,locked_until,strikes) VALUES(?,?,?,?,?,?) ON CONFLICT(kind,key) DO UPDATE SET fails=excluded.fails, first=excluded.first, locked_until=excluded.locked_until, strikes=excluded.strikes')
+      .run(this.store.kind, key, b.fails, b.first, b.lockedUntil, b.strikes);
+  }
   /** ms until the key may try again (0 = allowed) */
-  retryAfter(key: string, now = Date.now()): number { const b = this.buckets.get(key); return b && b.lockedUntil > now ? b.lockedUntil - now : 0; }
+  retryAfter(key: string, now = Date.now()): number { const b = this.get(key); return b && b.lockedUntil > now ? b.lockedUntil - now : 0; }
   fail(key: string, now = Date.now()) {
-    let b = this.buckets.get(key);
-    if (!b || now - b.first > this.windowMs) { b = { fails: 0, first: now, lockedUntil: 0, strikes: b?.strikes ?? 0 }; this.buckets.set(key, b); }
+    let b = this.get(key);
+    if (!b || now - b.first > this.windowMs) b = { fails: 0, first: now, lockedUntil: 0, strikes: b?.strikes ?? 0 };
     b.fails++;
     if (b.fails >= this.maxFails) { b.lockedUntil = now + Math.min(this.maxLockMs, this.baseLockMs * 2 ** b.strikes); b.strikes++; b.fails = 0; b.first = now; }
-    if (this.buckets.size > 10000) for (const [k, v] of this.buckets) if (v.lockedUntil < now && now - v.first > this.windowMs * 4) this.buckets.delete(k);
+    this.put(key, b);
+    // forget old entries (strikes reset after a quiet day)
+    if (this.store) this.store.db.prepare('DELETE FROM throttle WHERE kind=? AND locked_until<? AND first<?').run(this.store.kind, now, now - Math.max(this.windowMs * 4, 86400_000));
+    else if (this.buckets.size > 10000) for (const [k, v] of this.buckets) if (v.lockedUntil < now && now - v.first > this.windowMs * 4) this.buckets.delete(k);
   }
-  success(key: string) { this.buckets.delete(key); }
+  success(key: string) { if (this.store) this.store.db.prepare('DELETE FROM throttle WHERE kind=? AND key=?').run(this.store.kind, key); else this.buckets.delete(key); }
 }
 
 export interface SessionInfo { tokenHash: string; userId: string; csrf: string; createdAt: number; lastSeen: number; ip: string | null; userAgent: string | null }
 export interface UserRow { id: string; username: string; password_hash: string; totp_secret: string | null; totp_enabled: number; totp_last_step: number }
 
 export class Auth {
-  readonly ipThrottle = new Throttle(10, 15 * 60_000, 60_000, 60 * 60_000);
-  readonly userThrottle = new Throttle(5, 15 * 60_000, 30_000, 15 * 60_000);
+  readonly ipThrottle: Throttle;
+  readonly userThrottle: Throttle;
   private setupTokenFile: string;
   /** short-lived WebAuthn challenges and pending-2FA tickets, keyed by an opaque id */
   private pending = new Map<string, { kind: string; value: string; userId?: string; expires: number }>();
   constructor(private sys: DB, private cfg: Config) {
+    this.ipThrottle = new Throttle(10, 15 * 60_000, 60_000, 60 * 60_000, { db: sys, kind: 'ip' });
+    this.userThrottle = new Throttle(5, 15 * 60_000, 30_000, 15 * 60_000, { db: sys, kind: 'user' });
     this.setupTokenFile = join(cfg.dataDir, 'setup-token.txt');
     if (!this.hasUser() && !existsSync(this.setupTokenFile)) writeFileSync(this.setupTokenFile, randomBytes(18).toString('base64url') + '\n', { mode: 0o600 });
   }

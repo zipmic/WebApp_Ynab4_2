@@ -8,7 +8,7 @@ import { Welcome } from './views/Welcome';
 import { Button, Empty } from './components/ui';
 
 const Ynab4Import = lazy(() => import('./views/Ynab4Import'));
-export interface Status { setupRequired: boolean; setupNeedsToken: boolean; authenticated: boolean; csrf: string | null; passkeyLogin: boolean; visionConfigured: boolean;
+export interface Status { setupRequired: boolean; setupNeedsToken: boolean; authenticated: boolean; csrf: string | null; passkeyLogin: boolean; visionConfigured: boolean; twoFactorRequired: boolean;
   user: { username: string; totpEnabled: boolean; passkeys: number } | null }
 export interface BudgetInfo { id: string; name: string; createdAt: string; lastOpened: string | null }
 
