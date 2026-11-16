@@ -20,17 +20,18 @@ Det tager ca. 30–45 minutter første gang. Kommandoerne skrives i **PowerShell
 - Anbefalet: slå **BitLocker** til (Indstillinger → Privatliv og sikkerhed → Enhedskryptering/BitLocker), så dine
   økonomidata er krypteret, hvis computeren bliver stjålet. Og hav en adgangskode på din Windows-bruger.
 
-## 1. Installer Node.js og Git
+## 1. Installer Node.js
 1. Hent **Node.js LTS** (version 20.11 eller nyere) fra <https://nodejs.org> → "Windows Installer (.msi)". Brug standardvalgene.
-2. Hent **Git for Windows** fra <https://git-scm.com/download/win>. Brug standardvalgene.
-3. Luk og åbn PowerShell (administrator) igen, og tjek:
-   ```powershell
-   node -v
-   git --version
-   ```
-   `node -v` skal vise v20.11 eller højere.
+2. Luk og åbn PowerShell (administrator) igen, og tjek: `node -v` skal vise v20.11 eller højere.
 
-## 2. Hent og byg appen
+## 2. Hent appen
+**Nemmest: den færdige pakke** (kræver hverken npm, Git eller at bygge noget):
+1. Pak zip-filen `BudgetReborn-windows-x64-….zip` ud direkte i `C:\`, så mappen hedder `C:\BudgetReborn\app`.
+   (I zip-filen ligger den allerede som `BudgetReborn\app`.)
+2. Tjek, at filen `C:\BudgetReborn\app\dist\server\index.mjs` findes. Gå så videre til trin 3.
+
+**Eller: hent kildekoden og byg selv** (kræver også Git for Windows fra <https://git-scm.com/download/win>; npm
+følger med Node.js):
 ```powershell
 New-Item -ItemType Directory -Force C:\BudgetReborn
 git clone -b main https://github.com/zipmic/WebApp_Ynab4_2.git C:\BudgetReborn\app
@@ -156,6 +157,17 @@ ligger dine økonomidata hos dem. Gendannelse: **Gendan backup** på startsiden 
 - [ ] Tofaktorgodkendelse er slået til, og du har gemt QR-koden/nøglen et sikkert sted eller tilføjet en passkey som reserve.
 
 ## Opdatering til en ny version
+**Med den færdige pakke:** stop appen, læg den gamle app-mappe til side, pak den nye zip ud i `C:\`, og start igen:
+```powershell
+Stop-ScheduledTask -TaskName 'Budget Reborn'
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server\index.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Rename-Item C:\BudgetReborn\app app-gammel
+# pak den nye zip ud i C:\ (så C:\BudgetReborn\app findes igen)
+powershell -ExecutionPolicy Bypass -File C:\BudgetReborn\app\deploy\windows\restart-windows.ps1
+```
+Virker alt, kan `C:\BudgetReborn\app-gammel` slettes.
+
+**Med kildekoden (Git):**
 ```powershell
 cd C:\BudgetReborn\app
 git pull

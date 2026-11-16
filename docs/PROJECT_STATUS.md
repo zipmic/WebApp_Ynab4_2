@@ -39,6 +39,7 @@ Last updated after backlog items M1, M2, M3, M4, I1, I2, I3, D1, D2 and D3. Test
 | External vision provider | mock only |
 | Passkeys on real devices, TOTP with a real authenticator app | not tried |
 | Home Windows deployment (D1: `deploy/windows/*` incl. Caddy for the open port, `docs/DEPLOYMENT_GUIDE.md`) | app behaviour behind Caddy and Tailscale covered by unit tests; **Caddy itself not run** (download not permitted in the build environment); env-file parsing and the production bundle tested on Linux; **the PowerShell/batch scripts and Tailscale steps have not been run on a real Windows computer** (no Windows or tailscale.com access from the build environment) |
+| Prebuilt Windows package (`npm run package:windows`) | Windows binaries verified as x86-64 PE DLLs; the identical linux-x64 package started from an isolated folder (login, database, web app, OCR assets, backup); **not started on Windows** |
 | Deployment behind a real reverse proxy (VPS) | configuration examples only; never deployed |
 | Service worker / installable PWA | registered in production builds; not tested on phones |
 | Report figures | not compared with YNAB4's reports |

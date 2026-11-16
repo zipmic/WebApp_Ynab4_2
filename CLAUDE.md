@@ -22,6 +22,7 @@ npm run build && npm run test:e2e   # browser test against the production build
 npm run test:perf      # 51k-transaction benchmark with time limits
 npm run audit:ynab4 -- <.ynab4 folder | zip | Budget.yfull>   # migration audit, prints ids/counts only
 npm run backup -- --copy-to <folder>                       # back up every budget now (cron-safe)
+npm run package:windows # ready-to-run zip for Windows (owner has no npm): dist/BudgetReborn-windows-x64-*.zip
 npm start              # production (after build); settings via `node --env-file=<file> dist/server/index.mjs`
 ```
 

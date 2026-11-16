@@ -123,6 +123,11 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Do not add network calls, analytics, CDNs or fonts from other origins (CSP is `default-src 'self'`).
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
+**D4. Prebuilt Windows package** — *done*: `npm run package:windows` (`scripts/package-windows.mjs`) builds a zip with the
+built app, deploy scripts, guide and only the native runtime modules for win32-x64; the owner only needs Node.js. The same
+script builds a linux-x64 variant (`--platform linux-x64 --dir <folder>`), used to smoke-test the package in isolation.
+The owner has no npm: deliver new versions as this zip.
+
 ## 15. Exact next task
 1. If the owner reports problems with `docs/DEPLOYMENT_GUIDE.md` on their Windows computer: fix those first. Keep the app
    bound to 127.0.0.1, never forward port 8787, keep `BR_REQUIRE_2FA=1` for the open port, never trust all proxy hops,
