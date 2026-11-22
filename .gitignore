@@ -21,3 +21,6 @@ tests/e2e/screenshots/
 audit-report*.json
 real-data/
 private/
+
+# desktop app: smoke-test screenshots, sync test folders
+tests/desktop/screenshots/

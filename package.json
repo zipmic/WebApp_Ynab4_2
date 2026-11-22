@@ -1,9 +1,9 @@
 {
   "name": "budget-reborn",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Budget Reborn — a private, self-hosted successor to YNAB4",
+  "description": "Budget Reborn \u2014 a private successor to YNAB4 (desktop app with folder sync, or self-hosted server)",
   "engines": {
     "node": ">=20.11"
   },
@@ -18,7 +18,11 @@
     "postinstall": "node scripts/copy-ocr-assets.mjs",
     "audit:ynab4": "tsx scripts/audit-ynab4.ts",
     "backup": "tsx scripts/backup-now.ts",
-    "package:windows": "npm run build && node scripts/package-windows.mjs"
+    "package:windows": "npm run build && node scripts/package-windows.mjs",
+    "desktop:build": "npm run build && node scripts/build-desktop.mjs",
+    "desktop:start": "npm run desktop:build && electron dist/desktop-app",
+    "desktop:dist": "npm run desktop:build && electron-builder --publish never",
+    "test:desktop": "node tests/desktop/smoke.mjs"
   },
   "dependencies": {
     "@fastify/compress": "^9.3.0",
@@ -43,6 +47,8 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "clsx": "^2.1.1",
+    "electron": "45.2.3",
+    "electron-builder": "26.18.1",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
     "lucide-react": "^1.71.0",

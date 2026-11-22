@@ -125,6 +125,30 @@ describe('schema upgrades', () => {
     up.prepare(`INSERT INTO throttle(kind,key,fails,first,locked_until,strikes) VALUES('ip','x',1,1,0,0)`).run(); up.close();
     expect(existsSync(`${file}.pre-v${SYSTEM_SCHEMA_VERSION}.bak`)).toBe(true);
   });
+  it('budget v2 → v3 (file sync for the desktop app): data and every figure unchanged, the budget stays local-only, safety copy written', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'br-mig-')), 'b.sqlite'); v1Budget(file);
+    { const db = new Database(file); db.exec(BUDGET_MIGRATIONS[1]); db.pragma('user_version = 2'); db.close(); }
+    const s = new BudgetService(openBudgetDb(file), 'x');
+    expect(s.db.pragma('user_version', { simple: true })).toBe(BUDGET_SCHEMA_VERSION);
+    expect(s.listAccounts()[0]).toMatchObject({ balance: 487655, clearedBalance: 487655 });
+    expect(s.getBudget('2026-01').rows[0]).toMatchObject({ budgeted: 10000, activity: -12345, available: -2345, handling: 'confined' }); expect(s.getBudget('2026-01').availableToBudget).toBe(490000);
+    expect(s.checkIntegrity()).toEqual([]);
+    // nothing is recorded for synchronisation until the user chooses a sync folder
+    expect((s.db.prepare('SELECT capture FROM sync_ctl').get() as any).capture).toBe(0);
+    s.createTransaction({ accountId: 'a1', date: '2026-01-09', amount: -100, payeeName: 'Kiosk', categoryId: 'c1' });
+    for (const t of ['sync_changes', 'sync_outbox', 'sync_state', 'sync_writers']) expect((s.db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as any).n).toBe(0);
+    s.db.close();
+    const old = new Database(`${file}.pre-v${BUDGET_SCHEMA_VERSION}.bak`, { readonly: true }); expect(old.pragma('user_version', { simple: true })).toBe(2); old.close();
+  });
+  it('system database v2 → v3 (desktop sync columns): budgets and login kept', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'br-sys-')); const file = join(dir, 'system.sqlite');
+    const db = new Database(file); db.pragma('journal_mode = WAL'); db.exec(SYSTEM_MIGRATIONS[0]); db.exec(SYSTEM_MIGRATIONS[1]); db.pragma('user_version = 2');
+    db.exec(`INSERT INTO users(id,username,password_hash,created_at) VALUES('u1','owner','$argon2id$fake','x'); INSERT INTO budgets(id,name,created_at) VALUES('b1','Home','x');`); db.close();
+    const up = openSystemDb(file);
+    expect(up.pragma('user_version', { simple: true })).toBe(SYSTEM_SCHEMA_VERSION);
+    expect(up.prepare('SELECT id, name, sync_folder FROM budgets').get()).toEqual({ id: 'b1', name: 'Home', sync_folder: null });
+    expect(up.prepare('SELECT username FROM users').get()).toEqual({ username: 'owner' }); up.close();
+  });
   it('a database from a NEWER application version is refused instead of being damaged', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'br-mig-')), 'b.sqlite'); v1Budget(file);
     const db = new Database(file); db.pragma('user_version = 99'); db.close();

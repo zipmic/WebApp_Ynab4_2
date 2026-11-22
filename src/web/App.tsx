@@ -8,9 +8,9 @@ import { Welcome } from './views/Welcome';
 import { Button, Empty } from './components/ui';
 
 const Ynab4Import = lazy(() => import('./views/Ynab4Import'));
-export interface Status { setupRequired: boolean; setupNeedsToken: boolean; authenticated: boolean; csrf: string | null; passkeyLogin: boolean; visionConfigured: boolean; twoFactorRequired: boolean;
+export interface Status { setupRequired: boolean; setupNeedsToken: boolean; authenticated: boolean; csrf: string | null; passkeyLogin: boolean; visionConfigured: boolean; twoFactorRequired: boolean; desktop?: boolean;
   user: { username: string; totpEnabled: boolean; passkeys: number } | null }
-export interface BudgetInfo { id: string; name: string; createdAt: string; lastOpened: string | null }
+export interface BudgetInfo { id: string; name: string; createdAt: string; lastOpened: string | null; syncFolder?: string | null }
 
 export function App() {
   const qc = useQueryClient();
@@ -18,7 +18,7 @@ export function App() {
   useEffect(() => { setUnauthenticatedHandler(() => qc.invalidateQueries({ queryKey: ['status'] })); }, [qc]);
   if (status.data) setCsrf(status.data.csrf);
   if (status.isLoading) return <div className="flex h-full items-center justify-center text-ink-3">Loading…</div>;
-  if (status.error || !status.data) return <Empty title="Cannot reach the server" action={<Button onClick={() => status.refetch()}>Try again</Button>}>Budget Reborn stores your data on your own server. Check that it is running and that you are connected to it.</Empty>;
+  if (status.error || !status.data) return <Empty title="Cannot reach the server" action={<Button onClick={() => status.refetch()}>Try again</Button>}>Budget Reborn stores your data on your own server or computer. Check that it is running and that you are connected to it.</Empty>;
   if (!status.data.authenticated) return <AuthScreen status={status.data} onDone={() => { qc.clear(); status.refetch(); }} />;
   return <Signed status={status.data} />;
 }

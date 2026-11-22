@@ -1,0 +1,52 @@
+# Packaging of the desktop app. Build: npm run desktop:dist (see docs/DESKTOP_AND_SYNC.md).
+# The program and the user's data are separate: installing, updating or uninstalling never touches
+# %APPDATA%\BudgetReborn (Windows) or ~/Library/Application Support/BudgetReborn (macOS).
+appId: app.budgetreborn.desktop
+productName: Budget Reborn
+copyright: Budget Reborn
+directories:
+  app: dist/desktop-app
+  output: dist/desktop
+  buildResources: build
+files:
+  - "**/*"
+asar: true
+asarUnpack:
+  - "web/**"
+# better-sqlite3's bundled Node-API binaries work in Electron as they are: nothing is rebuilt
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+electronVersion: 45.2.3
+artifactName: "BudgetReborn-${version}-${os}-${arch}.${ext}"
+win:
+  files: ["!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*"]
+  target:
+    - target: nsis
+      arch: [x64]
+  # without a code-signing certificate the executable is not signed; Windows SmartScreen will warn on first start
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Budget Reborn
+  deleteAppDataOnUninstall: false
+mac:
+  files: ["!node_modules/better-sqlite3/prebuilds/{win32,linux,linuxmusl}-*"]
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.finance
+  # signing and notarisation need an Apple Developer ID (see docs); without it Gatekeeper asks the user to confirm
+  identity: null
+  hardenedRuntime: true
+dmg:
+  title: Budget Reborn ${version}
+linux:
+  files: ["!node_modules/better-sqlite3/prebuilds/{win32,darwin}-*"]
+  target:
+    - target: dir
+  category: Office

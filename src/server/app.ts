@@ -7,6 +7,7 @@ import cookie from '@fastify/cookie';
 import compress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
+import { randomBytes } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { z, ZodError } from 'zod';
 import type { SessionInfo } from './auth.ts';
@@ -19,6 +20,8 @@ import { AppError, bad } from './errors.ts';
 import { applyImport } from './importService.ts';
 import { auditNativeImport } from './migrationAudit.ts';
 import { extractWithVision, sniffImage } from './vision.ts';
+import { describeConflict } from './sync/describe.ts';
+import { APP_VERSION } from './version.ts';
 import { IMPORT_CSV_EXAMPLE, IMPORT_JSON_EXAMPLE, parseBankCsv, parseBankText, parseImportJson, finalize, type Candidate } from '../shared/bankparse.ts';
 import { toCsv } from '../shared/csv.ts';
 import { monthOf, todayISO } from '../shared/dates.ts';
@@ -57,6 +60,7 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
   app.addContentTypeParser(['application/octet-stream', 'image/png', 'image/jpeg', 'image/webp'], { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
   app.decorateRequest('session', null);
   const auth = core.auth;
+  const desktopSession: SessionInfo | null = cfg.desktop ? { tokenHash: '', userId: 'desktop', csrf: randomBytes(24).toString('hex'), createdAt: Date.now(), lastSeen: Date.now(), ip: null, userAgent: null } : null;
   const secure = (req: FastifyRequest) => req.protocol === 'https';
   const cookieName = (req: FastifyRequest) => (secure(req) ? '__Host-br_session' : 'br_session');
   /**
@@ -103,9 +107,17 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
         if (!ok) return reply.code(403).send({ error: { code: 'BAD_ORIGIN', message: 'Cross-site request blocked.' } });
       }
     }
+    const routeKey = `${req.method} ${req.routeOptions?.url ?? req.url.split('?')[0]}`;
+    // --- desktop app: no network listener exists (requests come only from the app's own window through an in-process
+    // protocol handler), so there is no login. The window gets this launch's CSRF token; sign-in routes do not exist.
+    if (desktopSession) {
+      req.session = desktopSession;
+      if (req.url.startsWith('/api/auth/') && routeKey !== 'GET /api/auth/status') return reply.code(404).send({ error: { code: 'NOT_AVAILABLE', message: 'Not used in the desktop app.' } });
+      if (unsafe && req.headers['x-csrf-token'] !== desktopSession.csrf) return reply.code(403).send({ error: { code: 'CSRF', message: 'Security token missing or expired. Reload the window.' } });
+      return;
+    }
     // --- authentication + CSRF. The route table is consulted so unknown URLs also answer 401, never leaking structure.
     req.session = auth.session(req.cookies[cookieName(req)] ?? req.cookies['br_session']);
-    const routeKey = `${req.method} ${req.routeOptions?.url ?? req.url.split('?')[0]}`;
     if (PUBLIC_ROUTES.has(routeKey)) return;
     if (!req.session) return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Please sign in.' } });
     if (unsafe && req.headers['x-csrf-token'] !== req.session.csrf) return reply.code(403).send({ error: { code: 'CSRF', message: 'Security token missing or expired. Reload the page.' } });
@@ -130,6 +142,7 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
 
   // ================================================================= auth
   app.get('/api/auth/status', async req => {
+    if (desktopSession) return { setupRequired: false, setupNeedsToken: false, authenticated: true, csrf: desktopSession.csrf, user: null, passkeyLogin: false, visionConfigured: !!cfg.vision, twoFactorRequired: false, desktop: true, version: 1 };
     const u = req.session ? auth.user(req.session.userId) : null;
     return { setupRequired: !auth.hasUser(), setupNeedsToken: !auth.hasUser() && !isLoopback(req), authenticated: !!u, csrf: req.session?.csrf ?? null,
       user: u ? { username: u.username, totpEnabled: !!u.totp_enabled, passkeys: (core.sys.prepare('SELECT COUNT(*) n FROM passkeys WHERE user_id=?').get(u.id) as { n: number }).n } : null,
@@ -466,5 +479,31 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
   });
   app.addHook('onClose', async () => core.close());
+  // ================================================================= desktop app: sync folder, conflicts, migration
+  if (cfg.desktop && core.sync) {
+    const sync = core.sync;
+    const token = z.object({ folder: z.string().min(8).max(64) });
+    app.get('/api/desktop/info', async () => ({ deviceId: sync.deviceId, deviceName: sync.deviceName, dataDir: cfg.dataDir, version: APP_VERSION }));
+    app.post('/api/desktop/open-folder', async req => sync.join(core.folderOf(token.parse(req.body).folder)));
+    app.post('/api/desktop/import-server-data', async req => core.importServerData(core.folderOf(token.parse(req.body).folder)));
+    // the budget's revision lets the window notice changes that arrived from other computers and reload
+    app.get(`${P}/sync`, async req => { const svc = svcOf(req); return { ...(await sync.status(svc.id)), revision: svc.revision() }; });
+    app.post(`${P}/sync/now`, async req => { const svc = svcOf(req); return { ...(await sync.syncNow(svc.id)), revision: svc.revision() }; });
+    app.post(`${P}/sync/publish`, async req => { const id = svcOf(req).id; const r = await sync.publish(id, core.folderOf(token.parse(req.body).folder)); return { ...r, status: await sync.status(id) }; });
+    app.post(`${P}/sync/relink`, async req => { const id = svcOf(req).id; const r = await sync.relink(id, core.folderOf(token.parse(req.body).folder)); return { ...r, status: await sync.status(id) }; });
+    app.post(`${P}/sync/unlink`, async req => { sync.unlink(svcOf(req).id); return { ok: true }; });
+    app.get(`${P}/sync/conflicts`, async req => {
+      const svc = svcOf(req); const st = await sync.status(svc.id);
+      const names = new Map(st.devices.map(d => [d.id, d.name]));
+      return sync.store(svc.id).conflicts(true).map(c => describeConflict(svc, c, id => names.get(id) ?? 'another computer'));
+    });
+    app.post(`${P}/sync/conflicts/:cid`, async req => {
+      const svc = svcOf(req); const cid = z.coerce.number().int().positive().parse((req.params as any).cid);
+      const r = sync.store(svc.id).resolve(cid, z.object({ choice: z.enum(['mine', 'theirs']) }).parse(req.body).choice);
+      sync.engine(svc.id)?.kick(200);
+      return r;
+    });
+  }
+
   return app;
 }

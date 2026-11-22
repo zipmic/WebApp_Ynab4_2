@@ -9,19 +9,22 @@ import { api, del, get, post, put, setCsrf } from '../lib/api';
 import { applyTheme, currentTheme, download, go, toast, toastError, useBudget, type Theme } from '../lib/store';
 import { useCategoryOptions } from './TxnEditor';
 import { AuditTable } from '../components/AuditTable';
+import { SyncSettings } from './Sync';
 
 const TABS = [['budget', 'Budget'], ['security', 'Security'], ['backups', 'Backups & export'], ['rules', 'Import rules'], ['app', 'Appearance & shortcuts']] as const;
 export default function Settings({ status, budgets, onSwitch }: { status: Status; budgets: BudgetInfo[]; onSwitch: (id: string | null, path?: string) => void }) {
-  const [tab, setTab] = useState<string>('budget');
+  const [tab, setTab] = useState<string>(() => (status.desktop && location.hash.includes('sync') ? 'sync' : 'budget'));
+  // the desktop app has no login: its Security tab is replaced by sync settings
+  const tabs = TABS.map(([k, l]) => (status.desktop && k === 'security' ? ['sync', 'Sync & this computer'] as const : [k, l] as const));
   return <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
     <header className="border-b border-line bg-surface px-4 pt-3 md:px-6"><h1 className="text-[17px] font-semibold tracking-tight">Settings</h1>
-      <div className="-mb-px mt-2 flex gap-1 overflow-x-auto" role="tablist">{TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cx('whitespace-nowrap border-b-2 px-3 py-2 text-[13.5px]', tab === k ? 'border-accent font-medium text-ink' : 'border-transparent text-ink-2 hover:text-ink')}>{l}</button>)}</div></header>
+      <div className="-mb-px mt-2 flex gap-1 overflow-x-auto" role="tablist">{tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cx('whitespace-nowrap border-b-2 px-3 py-2 text-[13.5px]', tab === k ? 'border-accent font-medium text-ink' : 'border-transparent text-ink-2 hover:text-ink')}>{l}</button>)}</div></header>
     <div className="mx-auto w-full max-w-3xl space-y-5 p-4 md:p-6">
-      {tab === 'budget' && <BudgetTab budgets={budgets} onSwitch={onSwitch} />}{tab === 'security' && <SecurityTab status={status} />}{tab === 'backups' && <BackupsTab onSwitch={onSwitch} />}{tab === 'rules' && <RulesTab />}{tab === 'app' && <AppTab />}</div></div>;
+      {tab === 'budget' && <BudgetTab budgets={budgets} onSwitch={onSwitch} desktop={!!status.desktop} />}{tab === 'security' && !status.desktop && <SecurityTab status={status} />}{tab === 'sync' && status.desktop && <SyncSettings />}{tab === 'backups' && <BackupsTab onSwitch={onSwitch} />}{tab === 'rules' && <RulesTab />}{tab === 'app' && <AppTab />}</div></div>;
 }
 const Card = ({ title, children, desc }: { title: string; children: ReactNode; desc?: ReactNode }) => <section className="rounded-2xl border border-line bg-surface p-5"><h2 className="text-[15px] font-semibold">{title}</h2>{desc && <p className="mt-0.5 text-[13px] text-ink-2">{desc}</p>}<div className="mt-4">{children}</div></section>;
 
-function BudgetTab({ budgets, onSwitch }: { budgets: BudgetInfo[]; onSwitch: (id: string | null, path?: string) => void }) {
+function BudgetTab({ budgets, onSwitch, desktop }: { budgets: BudgetInfo[]; onSwitch: (id: string | null, path?: string) => void; desktop: boolean }) {
   const b = useBudget(); const s = b.boot.settings; const [name, setName] = useState(s.name), [currency, setCurrency] = useState(s.currency), [symbol, setSymbol] = useState(s.format.symbol);
   const [delOpen, setDelOpen] = useState(false), [confirmName, setConfirmName] = useState(''); const [problems, setProblems] = useState<string[] | null>(null);
   const save = (patch: object) => b.mutate(() => put(b.url('/settings'), patch)).then(r => { if (r) toast('Saved', 'success'); });
@@ -40,7 +43,7 @@ function BudgetTab({ budgets, onSwitch }: { budgets: BudgetInfo[]; onSwitch: (id
       <div className="mb-2"><Badge tone={last.status === 'verified' ? 'pos' : 'warn'}>{last.status === 'verified' ? 'Verified against source' : 'Needs attention'}</Badge></div>
       <ul className="space-y-1 text-[13px]">{last.checks.map((c: any) => <li key={c.name} className={cx(c.status === 'fail' && 'text-neg')}><b className="font-medium">{c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '·'} {c.name}:</b> <span className="text-ink-2">{c.detail}</span></li>)}</ul></Card>}
     {last?.audit && <AuditTable audit={last.audit} />}
-    <Card title="Budgets" desc="Each budget is a separate file on your server.">
+    <Card title="Budgets" desc={desktop ? 'Each budget is a separate file on this computer.' : 'Each budget is a separate file on your server.'}>
       <ul className="divide-y divide-line rounded-xl border border-line">{budgets.map(x => <li key={x.id} className="flex items-center gap-3 px-3 py-2"><span className="flex-1 truncate font-medium">{x.name}</span>{x.id === b.bid ? <Badge tone="accent">Open</Badge> : <Button size="sm" onClick={() => onSwitch(x.id)}>Open</Button>}</li>)}</ul>
       <div className="mt-3 flex flex-wrap gap-2"><Button onClick={() => go('welcome')}><Plus size={15} />New, import or restore…</Button><Button className="text-neg" onClick={() => { setConfirmName(''); setDelOpen(true); }}><Trash2 size={15} />Delete this budget…</Button></div></Card>
     <Dialog open={delOpen} onClose={() => setDelOpen(false)} title={`Delete “${s.name}”?`} footer={<><Button onClick={() => setDelOpen(false)}>Cancel</Button><Button variant="danger" disabled={confirmName.trim() !== s.name} onClick={async () => { try { await post(`/budgets/${b.bid}/delete`, { confirmName }); toast('Budget deleted. A final backup was kept on the server.'); onSwitch(null); } catch (e) { toastError(e); } }}>Delete budget</Button></>}>

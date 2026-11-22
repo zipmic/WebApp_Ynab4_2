@@ -1,13 +1,16 @@
 /** Application core: system database, budget files, backups and restore. */
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Auth } from './auth.ts';
 import { BudgetService } from './budgetService.ts';
 import type { Config } from './config.ts';
 import { BUDGET_SCHEMA_VERSION, type DB, newId, nowIso, openBudgetDb, openSystemDb } from './db.ts';
 import { AppError, bad, notFound } from './errors.ts';
+import { hasSyncSchema } from './sync/capture.ts';
+import { SyncManager } from './sync/manager.ts';
+import { SyncStore } from './sync/store.ts';
 
 export const BACKUP_FORMAT = 'budget-reborn-sqlite';
 const ID_RE = /^[0-9a-f]{24}$/;
@@ -15,22 +18,30 @@ const BACKUP_RE = /^\d{8}T\d{6}Z-[a-z-]{1,24}\.sqlite$/;
 
 export class Core {
   readonly sys: DB; readonly auth: Auth;
+  /** file-based synchronisation between computers (desktop app only) */
+  readonly sync: SyncManager | null;
+  /** folders the user picked in a system dialog (desktop app): routes accept only these, by token, never raw paths */
+  private granted = new Map<string, string>();
   private services = new Map<string, BudgetService>();
   private budgetsDir: string; private backupsDir: string; private tmpDir: string;
   /**
    * `maintenance`: for command-line tools that run next to a live server (e.g. scripts/backup-now.ts). Nothing the
    * server owns is touched: the upload temp folder is not emptied, "last opened" is not updated, no automatic backup.
    */
-  constructor(public readonly cfg: Config, private readonly opts: { maintenance?: boolean } = {}) {
+  constructor(public readonly cfg: Config, private readonly opts: { maintenance?: boolean; syncAuto?: boolean } = {}) {
     this.budgetsDir = join(cfg.dataDir, 'budgets'); this.backupsDir = join(cfg.dataDir, 'backups'); this.tmpDir = join(cfg.dataDir, 'tmp');
     for (const d of [this.budgetsDir, this.backupsDir, this.tmpDir]) mkdirSync(d, { recursive: true, mode: 0o700 });
     if (!opts.maintenance) for (const f of readdirSync(this.tmpDir)) { try { unlinkSync(join(this.tmpDir, f)); } catch { /* ignore */ } }
     this.sys = openSystemDb(join(cfg.dataDir, 'system.sqlite'));
     this.auth = new Auth(this.sys, cfg);
+    this.sync = cfg.desktop && !opts.maintenance ? new SyncManager(this, { auto: opts.syncAuto ?? true }) : null;
   }
-  close() { for (const s of this.services.values()) s.db.close(); this.services.clear(); this.sys.close(); }
+  close() { this.sync?.stopAll(); for (const s of this.services.values()) s.db.close(); this.services.clear(); this.sys.close(); }
+  /** Registers a folder chosen by the user in a system dialog and returns an opaque token for it. */
+  grantFolder(path: string): string { const t = newId(); this.granted.set(t, path); return t; }
+  folderOf(token: string): string { const p = this.granted.get(token); if (!p) throw new AppError(403, 'FOLDER_NOT_GRANTED', 'Choose the folder again.'); return p; }
 
-  listBudgets() { return this.sys.prepare('SELECT id, name, created_at createdAt, last_opened lastOpened FROM budgets ORDER BY COALESCE(last_opened, created_at) DESC').all() as { id: string; name: string; createdAt: string; lastOpened: string | null }[]; }
+  listBudgets() { return this.sys.prepare('SELECT id, name, created_at createdAt, last_opened lastOpened, sync_folder syncFolder FROM budgets ORDER BY COALESCE(last_opened, created_at) DESC').all() as { id: string; name: string; createdAt: string; lastOpened: string | null; syncFolder: string | null }[]; }
   private file(id: string) { if (!ID_RE.test(id)) throw notFound('Budget'); return join(this.budgetsDir, id + '.sqlite'); }
   service(id: string): BudgetService {
     let s = this.services.get(id);
@@ -38,6 +49,7 @@ export class Core {
       if (!ID_RE.test(id) || !this.sys.prepare('SELECT 1 FROM budgets WHERE id=?').get(id) || !existsSync(this.file(id))) throw notFound('Budget');
       s = new BudgetService(openBudgetDb(this.file(id)), id); this.services.set(id, s);
       if (!this.opts.maintenance) { this.sys.prepare('UPDATE budgets SET last_opened=? WHERE id=?').run(nowIso(), id); this.autoBackup(id); }
+      this.sync?.attach(s);
     }
     return s;
   }
@@ -53,13 +65,13 @@ export class Core {
   /** Removes a budget from the app. A final backup is always kept in the backups folder. */
   deleteBudget(id: string) {
     const svc = this.service(id); this.backup(id, 'before-delete');
-    svc.db.close(); this.services.delete(id);
+    this.sync?.detach(id); svc.db.close(); this.services.delete(id);
     for (const ext of ['', '-wal', '-shm']) { try { unlinkSync(this.file(id) + ext); } catch { /* not present */ } }
     this.sys.prepare('DELETE FROM budgets WHERE id=?').run(id);
   }
   /** Discard a budget that was created by an import which then failed (no backup needed: nothing existed before). */
   discardBudget(id: string) {
-    const svc = this.services.get(id); svc?.db.close(); this.services.delete(id);
+    this.sync?.detach(id); const svc = this.services.get(id); svc?.db.close(); this.services.delete(id);
     for (const ext of ['', '-wal', '-shm']) { try { unlinkSync(this.file(id) + ext); } catch { /* not present */ } }
     this.sys.prepare('DELETE FROM budgets WHERE id=?').run(id);
   }
@@ -116,6 +128,8 @@ export class Core {
       renameSync(tmp, this.file(id));
     } catch (e) { try { unlinkSync(tmp); } catch { /* ignore */ } throw e; }
     const svc = new BudgetService(openBudgetDb(this.file(id)), id);
+    // a restored copy is a new, local-only budget: it must never continue a synchronised budget's history
+    if (hasSyncSchema(svc.db)) new SyncStore(svc, '').reset();
     const problems = svc.checkIntegrity();
     if (problems.length) { svc.db.close(); unlinkSync(this.file(id)); throw new AppError(422, 'BACKUP_INCONSISTENT', 'The backup failed the financial consistency check: ' + problems[0]); }
     const finalName = (name?.trim() || `${svc.getSettings().name} (restored)`).slice(0, 100);
@@ -123,6 +137,50 @@ export class Core {
     this.sys.prepare('INSERT INTO budgets(id,name,created_at,last_opened) VALUES(?,?,?,?)').run(id, finalName, nowIso(), nowIso());
     this.services.set(id, svc);
     return { id, name: finalName };
+  }
+  /**
+   * Migration from the server version: copies every budget of a server data folder (the folder that holds
+   * `system.sqlite` and `budgets/`) into this app as NEW budgets. The source folder is only read — its files are
+   * copied to a temporary folder first and opened there — and each copy is verified (integrity, consistency and
+   * row counts per table) before it is kept. A budget that fails is skipped and reported; nothing else changes.
+   */
+  importServerData(dir: string): { imported: { id: string; name: string; transactions: number }[]; failed: { name: string; reason: string }[] } {
+    const sysFile = join(dir, 'system.sqlite'); const bdir = join(dir, 'budgets');
+    if (!existsSync(bdir)) throw new AppError(404, 'NOT_SERVER_DATA', 'This folder does not look like a Budget Reborn data folder (it has no "budgets" folder).');
+    const names = new Map<string, string>();
+    if (existsSync(sysFile)) {
+      const work = join(this.tmpDir, newId()); mkdirSync(work, { mode: 0o700 });
+      try {
+        for (const ext of ['', '-wal']) if (existsSync(sysFile + ext)) writeFileSync(join(work, 'system.sqlite' + ext), readFileSync(sysFile + ext));
+        const db = new Database(join(work, 'system.sqlite'));
+        try { for (const r of db.prepare('SELECT id, name FROM budgets').all() as { id: string; name: string }[]) names.set(r.id, r.name); } finally { db.close(); }
+      } catch { /* names are optional */ } finally { rmSync(work, { recursive: true, force: true }); }
+    }
+    const imported: { id: string; name: string; transactions: number }[] = []; const failed: { name: string; reason: string }[] = [];
+    for (const f of readdirSync(bdir).filter(n => /^[0-9a-f]{24}\.sqlite$/.test(n)).sort()) {
+      const srcId = f.slice(0, 24); const label = names.get(srcId) ?? srcId.slice(0, 8);
+      const work = join(this.tmpDir, newId()); mkdirSync(work, { mode: 0o700 });
+      try {
+        for (const ext of ['', '-wal']) if (existsSync(join(bdir, f + ext))) writeFileSync(join(work, 'b.sqlite' + ext), readFileSync(join(bdir, f + ext)));
+        const src = new Database(join(work, 'b.sqlite'));
+        const counts = new Map<string, number>();
+        try {
+          for (const t of ['accounts', 'category_groups', 'categories', 'payees', 'transactions', 'monthly_budgets', 'scheduled', 'reconciliations'])
+            counts.set(t, (src.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n);
+          src.prepare('VACUUM INTO ?').run(join(work, 'copy.sqlite'));
+        } finally { src.close(); }
+        const r = this.restore(readFileSync(join(work, 'copy.sqlite')), label);
+        const svc = this.service(r.id);
+        for (const [t, n] of counts) {
+          const m = (svc.db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n;
+          if (m !== n) { this.discardBudget(r.id); throw new Error(`verification failed (${t})`); }
+        }
+        imported.push({ id: r.id, name: r.name, transactions: counts.get('transactions') ?? 0 });
+      } catch (e) { failed.push({ name: label, reason: (e as Error).message.slice(0, 200) }); }
+      finally { rmSync(work, { recursive: true, force: true }); }
+    }
+    if (!imported.length && !failed.length) throw new AppError(404, 'NOT_SERVER_DATA', 'No budgets were found in this folder.');
+    return { imported, failed };
   }
   /**
    * Restore from the open JSON export (GET /api/b/:bid/export/json) as a NEW budget. Every row is validated by the

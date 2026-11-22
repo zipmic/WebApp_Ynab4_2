@@ -3,12 +3,19 @@
  * Schema changes go through numbered migrations (PRAGMA user_version), each applied atomically.
  */
 import Database from 'better-sqlite3';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { installSyncTriggers } from './sync/capture.ts';
 
 export type DB = Database.Database;
 export const newId = () => randomBytes(12).toString('hex');
 export const nowIso = () => new Date().toISOString();
+/**
+ * An id derived from its content, in the same format as newId(). Used where two devices that are offline can
+ * create "the same" thing (a payee with a given name, the posting of a scheduled transaction on a given date):
+ * both then produce the same row instead of a duplicate.
+ */
+export const stableId = (...parts: string[]) => createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 24);
 
 export const BUDGET_MIGRATIONS: string[] = [
   `
@@ -101,6 +108,27 @@ export const BUDGET_MIGRATIONS: string[] = [
   CREATE TABLE revision(id INTEGER PRIMARY KEY CHECK(id = 1), n INTEGER NOT NULL);
   INSERT INTO revision VALUES(1, 1);
   `,
+  // v3: file-based synchronisation between devices (desktop app). Primary data is unchanged; these tables only record
+  // what this device changed (outbox), what it has received (version vector, op log), who last wrote each field
+  // (conflict detection) and conflicts waiting for the user. A budget without a sync folder never fills them.
+  `
+  CREATE TABLE sync_ctl(id INTEGER PRIMARY KEY CHECK(id = 1), capture INTEGER NOT NULL);
+  INSERT INTO sync_ctl VALUES(1, 0);
+  CREATE TABLE sync_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE sync_changes(seq INTEGER PRIMARY KEY AUTOINCREMENT, tbl TEXT NOT NULL, pk TEXT NOT NULL, before TEXT, after TEXT);
+  CREATE TABLE sync_outbox(seq INTEGER PRIMARY KEY, op TEXT NOT NULL, written INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE sync_vv(device TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+  CREATE TABLE sync_oplog(device TEXT NOT NULL, seq INTEGER NOT NULL, deps TEXT NOT NULL, keys TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(device, seq));
+  CREATE TABLE sync_writers(tbl TEXT NOT NULL, pk TEXT NOT NULL, field TEXT NOT NULL, ws TEXT NOT NULL, PRIMARY KEY(tbl, pk, field));
+  CREATE TABLE sync_conflicts(id INTEGER PRIMARY KEY AUTOINCREMENT, op_device TEXT NOT NULL, op_seq INTEGER NOT NULL,
+    kind TEXT NOT NULL, rows TEXT NOT NULL, op TEXT NOT NULL, local TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, resolved_at TEXT, resolution TEXT);
+  -- payee names stay unique through the app (new payees and renames reuse/merge by name), but no longer through a
+  -- UNIQUE index: two computers renaming different payees to the same name while offline must not make the
+  -- other computer's changes impossible to apply
+  DROP INDEX payees_name;
+  CREATE INDEX payees_name ON payees(name COLLATE NOCASE);
+  `,
 ];
 
 /** Tables whose changes are recorded for undo/redo. */
@@ -127,6 +155,12 @@ export const SYSTEM_MIGRATIONS: string[] = [
   `
   CREATE TABLE throttle(kind TEXT NOT NULL, key TEXT NOT NULL, fails INTEGER NOT NULL, first INTEGER NOT NULL,
     locked_until INTEGER NOT NULL, strikes INTEGER NOT NULL, PRIMARY KEY(kind, key));
+  `,
+  // v3: desktop app — which budgets are synchronised with a folder (shown in the budget chooser; prevents opening
+  // the same shared budget twice on one computer)
+  `
+  ALTER TABLE budgets ADD COLUMN sync_budget_id TEXT;
+  ALTER TABLE budgets ADD COLUMN sync_folder TEXT;
   `,
 ];
 export const SYSTEM_SCHEMA_VERSION = SYSTEM_MIGRATIONS.length;
@@ -163,6 +197,7 @@ export function openBudgetDb(file: string, migrations: string[] = BUDGET_MIGRATI
   const db = open(file);
   try { migrate(db, migrations, file); } catch (e) { db.close(); throw e; }
   installUndoTriggers(db);
+  installSyncTriggers(db);
   return db;
 }
 export function openSystemDb(file: string): DB {

@@ -3,7 +3,6 @@
  * passkeys, server-side sessions (only a SHA-256 of the token is stored), CSRF tokens, and
  * brute-force throttling per IP and per account.
  */
-import { hash, verify, Algorithm } from '@node-rs/argon2';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,7 +10,12 @@ import type { Config } from './config.ts';
 import { type DB, newId, nowIso } from './db.ts';
 import { AppError, bad } from './errors.ts';
 
-const ARGON = { algorithm: Algorithm.Argon2id, memoryCost: 19456, timeCost: 3, parallelism: 1 };
+// Argon2id with the same parameters as always; the native hasher is loaded on first use (the desktop app has no
+// passwords and does not ship it).
+const argon = () => import('@node-rs/argon2');
+const ARGON = { memoryCost: 19456, timeCost: 3, parallelism: 1 };
+const hash = async (password: string, opts: typeof ARGON) => { const a = await argon(); return a.hash(password, { ...opts, algorithm: a.Algorithm.Argon2id }); };
+const verify = async (h: string, password: string) => (await argon()).verify(h, password);
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 export const safeEqual = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 

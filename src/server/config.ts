@@ -31,6 +31,11 @@ export interface Config {
   publicOrigin: string | null;
   vision: { baseUrl: string; apiKey: string; model: string } | null;
   backupKeep: number;
+  /**
+   * Desktop app (Electron): the app runs inside the user's own account with no network listener, so there is no
+   * login; the window gets a per-launch session. Budgets can be synchronised through a shared folder.
+   */
+  desktop: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -46,5 +51,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicOrigin: env.BR_PUBLIC_ORIGIN?.replace(/\/$/, '') || null,
     vision: env.BR_VISION_API_KEY || env.BR_VISION_BASE_URL ? { baseUrl: (env.BR_VISION_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, ''), apiKey: env.BR_VISION_API_KEY ?? '', model: env.BR_VISION_MODEL ?? 'gpt-4o-mini' } : null,
     backupKeep: int(env.BR_BACKUP_KEEP, 30),
+    desktop: bool(env.BR_DESKTOP, false),
   };
 }

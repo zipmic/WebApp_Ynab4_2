@@ -14,6 +14,8 @@ const Reports = lazy(() => import('./Reports'));
 const ScheduledView = lazy(() => import('./Scheduled'));
 const BankImport = lazy(() => import('./BankImport'));
 const Settings = lazy(() => import('./Settings'));
+const ConflictsView = lazy(() => import('./Sync').then(m => ({ default: m.ConflictsView })));
+import { SyncIndicator } from './Sync';
 
 export function Shell({ status, budgets, onSwitch }: { status: Status; budgets: BudgetInfo[]; onSwitch: (id: string | null, path?: string) => void }) {
   const b = useBudget(); const route = useRoute(); const mobile = useIsMobile();
@@ -51,6 +53,7 @@ export function Shell({ status, budgets, onSwitch }: { status: Status; budgets: 
   else if (page === 'scheduled') content = <ScheduledView />;
   else if (page === 'import') content = <BankImport visionConfigured={status.visionConfigured} />;
   else if (page === 'settings') content = <Settings status={status} budgets={budgets} onSwitch={onSwitch} />;
+  else if (page === 'conflicts' && status.desktop) content = <ConflictsView />;
   else content = <BudgetView />;
 
   return (
@@ -70,6 +73,7 @@ export function Shell({ status, budgets, onSwitch }: { status: Status; budgets: 
           <AccountLinks title="Budget accounts" list={onBudget} /><AccountLinks title="Tracking accounts" list={tracking} /><AccountLinks title="Closed" list={closed} />
           {!collapsed && <button onClick={() => setAccountDialog('new')} className="mt-3 flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] text-slate-400 hover:bg-side-hover hover:text-white"><Plus size={15} />Add account</button>}
         </nav>
+        {status.desktop && <SyncIndicator collapsed={collapsed} />}
         <div className={cx('flex items-center gap-1 border-t border-white/10 p-2', collapsed && 'flex-col')}>
           <IconBtn title={b.boot.undo.undo ? `Undo: ${b.boot.undo.undo} (Ctrl+Z)` : 'Nothing to undo'} disabled={!b.boot.undo.undo} onClick={b.undo}><Undo2 size={16} /></IconBtn>
           <IconBtn title={b.boot.undo.redo ? `Redo: ${b.boot.undo.redo} (Ctrl+Y)` : 'Nothing to redo'} disabled={!b.boot.undo.redo} onClick={b.redo}><Redo2 size={16} /></IconBtn>
@@ -92,7 +96,7 @@ export function Shell({ status, budgets, onSwitch }: { status: Status; budgets: 
         </div></nav>}
       <Dialog open={more} onClose={() => setMore(false)} title={b.boot.settings.name}>
         <div className="-mx-2 space-y-0.5" onClick={() => setMore(false)}>
-          {[['scheduled', 'Scheduled transactions', <CalendarClock size={18} />], ['import', 'Import transactions', <ScanLine size={18} />], ['settings', 'Settings, backups & security', <SettingsIcon size={18} />], ['welcome', 'Switch, create or restore budget', <ChevronsUpDown size={18} />]].map(([to, label, icon]) => (
+          {[['scheduled', 'Scheduled transactions', <CalendarClock size={18} />], ['import', 'Import transactions', <ScanLine size={18} />], ['settings', status.desktop ? 'Settings, sync & backups' : 'Settings, backups & security', <SettingsIcon size={18} />], ['welcome', 'Switch, create or restore budget', <ChevronsUpDown size={18} />]].map(([to, label, icon]) => (
             <a key={to as string} href={`#/${to}`} className="flex items-center gap-3 rounded-xl px-3 py-3 text-[15px] hover:bg-sunken">{icon as ReactNode}{label as string}</a>))}
           <div className="flex gap-2 px-2 pt-3"><Button className="flex-1" disabled={!b.boot.undo.undo} onClick={b.undo}><Undo2 size={16} />Undo</Button><Button className="flex-1" disabled={!b.boot.undo.redo} onClick={b.redo}><Redo2 size={16} />Redo</Button></div>
         </div>

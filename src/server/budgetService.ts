@@ -3,7 +3,7 @@
  * single SQLite transaction and an undo group. Financial rules live in src/shared/engine.ts; this
  * layer validates input, maintains transfer/split integrity and feeds aggregates to the engine.
  */
-import { type DB, newId, nowIso } from './db.ts';
+import { type DB, newId, nowIso, stableId } from './db.ts';
 import { AppError, bad, conflict, notFound } from './errors.ts';
 import { computeBudget, INCOME_NEXT, INCOME_THIS, type EngineResult, type OverspendingHandling } from '../shared/engine.ts';
 import { addMonths, isValidISODate, isValidMonth, monthOf, prevMonth, todayISO, type ISODate, type Month } from '../shared/dates.ts';
@@ -32,6 +32,11 @@ export class BudgetService {
   private engineCache: { version: number; result: EngineResult } | null = null;
   private accountsCache: { version: number; list: Account[] } | null = null;
   private inMutation = false;
+  /**
+   * Called at the end of every write transaction, inside it (file sync seals the captured changes into an
+   * operation here, so the change and its operation are committed together or not at all).
+   */
+  onCommit: ((label: string) => void) | null = null;
   /** Revision the caller last saw; when set, the next write fails with 409 STALE unless it is still current. */
   private expected: number | null = null;
   constructor(public readonly db: DB, public readonly id: string) {}
@@ -65,6 +70,7 @@ export class BudgetService {
         this.db.prepare('UPDATE undo_state SET active=1, grp=?').run(grp);
         const r = fn();
         this.db.prepare('UPDATE undo_state SET active=0').run();
+        this.onCommit?.(label);
         if (!(this.db.prepare('SELECT 1 FROM undo_log WHERE grp=? LIMIT 1').get(grp))) this.db.prepare('DELETE FROM undo_groups WHERE grp=?').run(grp);
         // keep the 200 most recent undo steps
         const cut = this.db.prepare(`SELECT grp FROM undo_groups WHERE kind='undo' ORDER BY grp DESC LIMIT 1 OFFSET 200`).get() as { grp: number } | undefined;
@@ -82,7 +88,9 @@ export class BudgetService {
       const out = this.db.transaction(() => {
         this.db.exec('UPDATE undo_state SET active=0; DELETE FROM undo_log; DELETE FROM undo_groups;');
         this.bumpRevision();
-        return fn();
+        const r = fn();
+        this.onCommit?.('Import');
+        return r;
       }).immediate();
       this.version++;
       return out;
@@ -100,6 +108,7 @@ export class BudgetService {
       this.db.prepare('UPDATE undo_state SET active=1, grp=?').run(ng);
       for (const s of stmts) this.db.exec(s.sql);
       this.db.prepare('UPDATE undo_state SET active=0').run();
+      this.onCommit?.(`${kind === 'undo' ? 'Undo' : 'Redo'}: ${g.label}`);
       this.db.prepare('DELETE FROM undo_log WHERE grp=?').run(g.grp);
       this.db.prepare('DELETE FROM undo_groups WHERE grp=?').run(g.grp);
     }).immediate(); } finally { this.expected = null; }
@@ -135,7 +144,7 @@ export class BudgetService {
     const sums = new Map((this.db.prepare(`SELECT account_id id, SUM(amount) bal, SUM(CASE WHEN cleared<>'uncleared' THEN amount ELSE 0 END) clr, COUNT(*) n
       FROM transactions WHERE parent_id IS NULL GROUP BY account_id`).all() as { id: string; bal: number; clr: number; n: number }[]).map(r => [r.id, r]));
     const rec = new Map((this.db.prepare('SELECT account_id id, MAX(at) at FROM reconciliations GROUP BY account_id').all() as { id: string; at: string }[]).map(r => [r.id, r.at]));
-    const list = (this.db.prepare('SELECT * FROM accounts ORDER BY on_budget DESC, sort_order, name').all() as AccountRow[]).map(a => {
+    const list = (this.db.prepare('SELECT * FROM accounts ORDER BY on_budget DESC, sort_order, name, id').all() as AccountRow[]).map(a => {
       const s = sums.get(a.id);
       return { id: a.id, name: a.name, type: a.type, onBudget: !!a.on_budget, closed: !!a.closed, sortOrder: a.sort_order, note: a.note,
         balance: s?.bal ?? 0, clearedBalance: s?.clr ?? 0, unclearedBalance: (s?.bal ?? 0) - (s?.clr ?? 0), txCount: s?.n ?? 0, lastReconciledAt: rec.get(a.id) ?? null };
@@ -195,11 +204,11 @@ export class BudgetService {
 
   // ---------------------------------------------------------------- categories
   listGroups(): CategoryGroup[] {
-    return (this.db.prepare('SELECT * FROM category_groups WHERE system=0 ORDER BY sort_order, name').all() as any[])
+    return (this.db.prepare('SELECT * FROM category_groups WHERE system=0 ORDER BY sort_order, name, id').all() as any[])
       .map(g => ({ id: g.id, name: g.name, sortOrder: g.sort_order, hidden: !!g.hidden, note: g.note }));
   }
   listCategories(): Category[] {
-    return (this.db.prepare(`SELECT c.* FROM categories c JOIN category_groups g ON g.id=c.group_id WHERE c.kind='normal' ORDER BY g.sort_order, c.sort_order, c.name`).all() as any[])
+    return (this.db.prepare(`SELECT c.* FROM categories c JOIN category_groups g ON g.id=c.group_id WHERE c.kind='normal' ORDER BY g.sort_order, g.id, c.sort_order, c.name, c.id`).all() as any[])
       .map(c => ({ id: c.id, groupId: c.group_id, name: c.name, sortOrder: c.sort_order, hidden: !!c.hidden, note: c.note }));
   }
   createGroup(name: string): string {
@@ -273,7 +282,7 @@ export class BudgetService {
 
   // ---------------------------------------------------------------- payees
   listPayees(): Payee[] {
-    return (this.db.prepare(`SELECT p.id, p.name, p.auto_category_id, (SELECT COUNT(*) FROM transactions t WHERE t.payee_id=p.id) uses FROM payees p ORDER BY p.name COLLATE NOCASE`).all() as any[])
+    return (this.db.prepare(`SELECT p.id, p.name, p.auto_category_id, (SELECT COUNT(*) FROM transactions t WHERE t.payee_id=p.id) uses FROM payees p ORDER BY p.name COLLATE NOCASE, p.id`).all() as any[])
       .map(p => ({ id: p.id, name: p.name, autoCategoryId: p.auto_category_id, uses: p.uses }));
   }
   ensurePayee(name: string): string {
@@ -281,7 +290,9 @@ export class BudgetService {
     if (!name) throw bad('Payee name is required');
     const ex = this.db.prepare('SELECT id FROM payees WHERE name=? COLLATE NOCASE').get(name) as { id: string } | undefined;
     if (ex) return ex.id;
-    const id = newId();
+    // same name → same id on every device (no duplicate payee when two devices add it while offline)
+    const sid = stableId('payee', name.toLowerCase());
+    const id = this.db.prepare('SELECT 1 FROM payees WHERE id=?').get(sid) ? newId() : sid;
     this.db.prepare('INSERT INTO payees(id,name,norm) VALUES(?,?,?)').run(id, name, normalizePayee(name));
     return id;
   }
@@ -322,7 +333,7 @@ export class BudgetService {
     const rows = this.db.prepare(`SELECT t.*, py.name payee_name, ta.name transfer_name, (o.parent_id IS NOT NULL) far_split
       FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN payees py ON py.id=t.payee_id
       LEFT JOIN accounts ta ON ta.id=t.transfer_account_id LEFT JOIN transactions o ON o.id=t.transfer_txn_id
-      WHERE ${where.join(' AND ')} ORDER BY t.date, t.seq ${f.limit ? 'LIMIT ' + Math.floor(f.limit) : ''}`).all(...p) as (TxRow & { payee_name: string | null; transfer_name: string | null; far_split: number })[];
+      WHERE ${where.join(' AND ')} ORDER BY t.date, t.created_at, t.seq ${f.limit ? 'LIMIT ' + Math.floor(f.limit) : ''}`).all(...p) as (TxRow & { payee_name: string | null; transfer_name: string | null; far_split: number })[];
     const splitIds = rows.filter(r => r.is_split).map(r => r.id);
     const kids = new Map<string, SubTxn[]>();
     for (let i = 0; i < splitIds.length; i += 500) {
@@ -397,14 +408,15 @@ export class BudgetService {
     return { acct, target, splits };
   }
   /** Inserts a transaction with its transfer counterpart / split children. Returns ids of all top-level rows touched. */
-  private createTxnInner(input: TxnInput, remember = true, forcedId?: string, partnerState?: Map<string, { cleared: Cleared }>): string[] {
+  private createTxnInner(input: TxnInput, remember = true, forcedId?: string, partnerState?: Map<string, { cleared: Cleared }>, idOf?: (part: string) => string): string[] {
     const { acct, target, splits } = this.validateInput(input);
-    const id = forcedId ?? newId(); const touched = [id];
+    const nid = (part: string) => { if (!idOf) return newId(); const v = idOf(part); return this.db.prepare('SELECT 1 FROM transactions WHERE id=?').get(v) ? newId() : v; };
+    const id = forcedId ?? nid('main'); const touched = [id];
     const payeeId = target ? null : input.payeeId
       ? ((this.db.prepare('SELECT id FROM payees WHERE id=?').get(input.payeeId) as { id: string } | undefined)?.id ?? null)
       : input.payeeName?.trim() ? this.ensurePayee(input.payeeName) : null;
     const [catHere, catThere] = this.transferCategories(acct, target, splits ? null : input.categoryId ?? null);
-    const partnerId = target ? newId() : null;
+    const partnerId = target ? nid('partner') : null;
     this.insertRow({ id, account_id: acct.id, date: input.date, payee_id: target ? null : payeeId, category_id: splits ? null : catHere, memo: input.memo ?? '', amount: input.amount,
       cleared: input.cleared ?? 'uncleared', flag: input.flag ?? null, transfer_account_id: target?.id ?? null, transfer_txn_id: partnerId, parent_id: null,
       is_split: splits ? 1 : 0, import_id: input.importId ?? null, source: input.source ?? null });
@@ -413,9 +425,9 @@ export class BudgetService {
         cleared: partnerState?.get(`${target.id}|${-input.amount}`)?.cleared ?? 'uncleared', flag: null, transfer_account_id: acct.id, transfer_txn_id: id, parent_id: null, is_split: 0, import_id: null, source: input.source ?? null });
       touched.push(partnerId!);
     }
-    for (const s of splits ?? []) {
+    for (const [i, s] of (splits ?? []).entries()) {
       const st = s.transferAccountId ? this.accountRow(s.transferAccountId) : null;
-      const cid = newId(), pid = st ? newId() : null;
+      const cid = nid(`split${i}`), pid = st ? nid(`split${i}-partner`) : null;
       const [ch, ct] = this.transferCategories(acct, st, s.categoryId ?? null);
       this.insertRow({ id: cid, account_id: acct.id, date: input.date, payee_id: null, category_id: ch, memo: s.memo ?? '', amount: s.amount, cleared: input.cleared ?? 'uncleared', flag: null,
         transfer_account_id: st?.id ?? null, transfer_txn_id: pid, parent_id: id, is_split: 0, import_id: null, source: null });
@@ -576,7 +588,7 @@ export class BudgetService {
   private engine(through?: Month): EngineResult {
     const need = through ?? addMonths(monthOf(todayISO()), 12);
     if (this.engineCache?.version === this.version && this.engineCache.result.last >= need) return this.engineCache.result;
-    const categoryIds = (this.db.prepare(`SELECT id FROM categories WHERE kind='normal'`).all() as { id: string }[]).map(c => c.id);
+    const categoryIds = (this.db.prepare(`SELECT id FROM categories WHERE kind='normal' ORDER BY id`).all() as { id: string }[]).map(c => c.id);
     const activity = this.db.prepare(`SELECT substr(t.date,1,7) month, t.category_id categoryId, SUM(t.amount) amount
       FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.category_id IS NOT NULL AND a.on_budget=1 GROUP BY 1,2`).all() as { month: string; categoryId: string; amount: number }[];
     const budgets = this.db.prepare('SELECT month, category_id categoryId, budgeted, overspending FROM monthly_budgets').all() as { month: string; categoryId: string; budgeted: number; overspending: OverspendingHandling | null }[];
@@ -721,7 +733,7 @@ export class BudgetService {
 
   // ---------------------------------------------------------------- scheduled transactions
   listScheduled(): Scheduled[] {
-    return (this.db.prepare(`SELECT s.*, p.name payee_name, ta.name transfer_name FROM scheduled s LEFT JOIN payees p ON p.id=s.payee_id LEFT JOIN accounts ta ON ta.id=s.transfer_account_id ORDER BY s.next_date`).all() as any[])
+    return (this.db.prepare(`SELECT s.*, p.name payee_name, ta.name transfer_name FROM scheduled s LEFT JOIN payees p ON p.id=s.payee_id LEFT JOIN accounts ta ON ta.id=s.transfer_account_id ORDER BY s.next_date, s.id`).all() as any[])
       .map(s => ({ id: s.id, accountId: s.account_id, nextDate: s.next_date, frequency: s.frequency, payeeId: s.payee_id,
         payeeName: s.transfer_account_id ? `Transfer : ${s.transfer_name}` : s.payee_name ?? '', categoryId: s.category_id, memo: s.memo, amount: s.amount, flag: s.flag,
         transferAccountId: s.transfer_account_id, splits: JSON.parse(s.splits) }));
@@ -751,8 +763,10 @@ export class BudgetService {
       for (const s of due) {
         let date: string | null = s.next_date, guard = 0;
         do {
+          // the same occurrence gets the same ids on every device, so two devices entering it while offline do not duplicate it
+          const occurrence = date!;
           ids.push(...this.createTxnInner({ accountId: s.account_id, date: date!, payeeId: s.payee_id, categoryId: s.category_id, memo: s.memo, amount: s.amount, flag: s.flag,
-            transferAccountId: s.transfer_account_id, splits: JSON.parse(s.splits), source: 'scheduled' }, false));
+            transferAccountId: s.transfer_account_id, splits: JSON.parse(s.splits), source: 'scheduled' }, false, undefined, undefined, part => stableId('scheduled', s.id, occurrence, part)));
           posted++;
           date = nextOccurrence(date!, s.frequency as Frequency, s.anchor_day ?? undefined);
         } while (!onlyId && date && date <= today && ++guard < 400);
