@@ -439,3 +439,105 @@ describe('sync: randomized sessions through a slow, unreliable cloud (separate f
     }
   });
 });
+
+// The situations named in the requirements, one test each (Windows = computer A, Mac = computer B).
+describe('sync: the required situations A–G', () => {
+  const budgeted = (c: Core, id: string, m: string, cat: string) => sa(c, id).getBudget(m).rows.find(r => r.categoryId === cat)!.budgeted;
+  it('A: a transaction made on Windows while the Mac is offline appears on the Mac when it comes back', async () => {
+    const p = await pair();
+    const t = sa(p.a, p.aid).createTransaction({ accountId: p.checking, date: '2026-01-18', amount: -77_00, payeeName: 'Pharmacy', categoryId: p.food });
+    await p.a.sync!.syncNow(p.aid); // the Mac does nothing meanwhile (offline)
+    expect(sa(p.b, p.bid).listTransactions({ ids: [t.id] })).toHaveLength(0);
+    await p.b.sync!.syncNow(p.bid); // back online
+    expect(sa(p.b, p.bid).listTransactions({ ids: [t.id] })[0]).toMatchObject({ amount: -77_00, payeeName: 'Pharmacy' });
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid));
+  });
+  it('B: different transactions created on both computers are both kept', async () => {
+    const p = await pair();
+    const a = sa(p.a, p.aid).createTransaction({ accountId: p.checking, date: '2026-01-19', amount: -1_00, payeeName: 'On Windows', categoryId: p.food });
+    const b = sa(p.b, p.bid).createTransaction({ accountId: p.checking, date: '2026-01-19', amount: -2_00, payeeName: 'On Mac', categoryId: p.food });
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    for (const [c, id] of [[p.a, p.aid], [p.b, p.bid]] as [Core, string][]) expect(sa(c, id).listTransactions({ ids: [a.id, b.id] })).toHaveLength(2);
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid));
+  });
+  it('C: the same transaction\'s amount changed on both while offline → a conflict for the user, never a silent choice', async () => {
+    const p = await pair();
+    const t = sa(p.a, p.aid).listTransactions({}).find(x => x.amount === -123_45)!;
+    sa(p.a, p.aid).updateTransaction(t.id, { amount: -100_00 }); sa(p.b, p.bid).updateTransaction(t.id, { amount: -150_00 });
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(sa(p.a, p.aid).listTransactions({ ids: [t.id] })[0].amount).toBe(-100_00); // each keeps its own until decided
+    expect(sa(p.b, p.bid).listTransactions({ ids: [t.id] })[0].amount).toBe(-150_00);
+    const ca = p.a.sync!.store(p.aid).conflicts(); expect(ca).toHaveLength(1); expect(ca[0].rows[0].fields).toEqual(['amount']);
+    expect(p.b.sync!.store(p.bid).openConflictCount()).toBe(1);
+    p.b.sync!.store(p.bid).resolve(p.b.sync!.store(p.bid).conflicts()[0].id, 'mine');
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(sa(p.a, p.aid).listTransactions({ ids: [t.id] })[0].amount).toBe(-150_00);
+    expect(p.a.sync!.store(p.aid).openConflictCount()).toBe(0);
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid));
+  });
+  it('D: deleted on Windows and edited on the Mac → the conflict is detected on both computers', async () => {
+    const p = await pair();
+    const t = sa(p.a, p.aid).listTransactions({}).find(x => x.amount === -123_45)!;
+    sa(p.a, p.aid).deleteTransactions([t.id]); sa(p.b, p.bid).updateTransaction(t.id, { memo: 'still needed' });
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(p.a.sync!.store(p.aid).conflicts()[0].kind).toBe('changed_there_deleted_here');
+    expect(p.b.sync!.store(p.bid).conflicts()[0].kind).toBe('deleted_there_changed_here');
+    expect(sa(p.b, p.bid).listTransactions({ ids: [t.id] })).toHaveLength(1); // nothing deleted until decided
+    p.a.sync!.store(p.aid).resolve(p.a.sync!.store(p.aid).conflicts()[0].id, 'mine'); // keep it deleted
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(sa(p.b, p.bid).listTransactions({ ids: [t.id] })).toHaveLength(0);
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid));
+  });
+  it('E: moving money between categories on Windows while changing the budget on the Mac keeps the budget rules correct', async () => {
+    const p = await pair();
+    sa(p.a, p.aid).moveMoney('2026-01', p.food, p.fun, 50_00);           // Windows: Food → Fun
+    sa(p.b, p.bid).setBudget('2026-02', p.food, { budgeted: 410_00 });   // Mac: another month
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(p.a.sync!.store(p.aid).openConflictCount()).toBe(0);
+    expect(budgeted(p.b, p.bid, '2026-01', p.food)).toBe(350_00); expect(budgeted(p.b, p.bid, '2026-01', p.fun)).toBe(50_00);
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid)); // identical figures, incl. Available to Budget and rollover
+    // the same cell on both: Windows moves money out of Food, the Mac sets Food's amount → a decision, not a guess
+    sa(p.a, p.aid).moveMoney('2026-01', p.food, p.fun, 10_00); sa(p.b, p.bid).setBudget('2026-01', p.food, { budgeted: 500_00 });
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(p.a.sync!.store(p.aid).openConflictCount()).toBe(1);
+    p.a.sync!.store(p.aid).resolve(p.a.sync!.store(p.aid).conflicts()[0].id, 'theirs');
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid));
+    for (const [c, id] of [[p.a, p.aid], [p.b, p.bid]] as [Core, string][]) expect(sa(c, id).checkIntegrity()).toEqual([]);
+  });
+  it('F: reconciling on one computer while the other has unsynchronised changes to a reconciled transaction is a conflict', async () => {
+    const p = await pair();
+    const t = sa(p.a, p.aid).listTransactions({}).find(x => x.amount === -123_45)!;
+    sa(p.a, p.aid).updateTransaction(t.id, { cleared: 'cleared' }); await sync([p.a, p.aid], [p.b, p.bid]);
+    const statement = sa(p.a, p.aid).listAccounts().find(a => a.id === p.checking)!.clearedBalance;
+    sa(p.a, p.aid).reconcile(p.checking, statement);                         // Windows: reconciles (t becomes "reconciled")
+    sa(p.b, p.bid).updateTransaction(t.id, { amount: -124_45 });              // Mac, not yet synchronised: changes its amount
+    sa(p.b, p.bid).createTransaction({ accountId: p.checking, date: '2026-01-29', amount: -5_00, payeeName: 'New', categoryId: p.food, cleared: 'cleared' }); // compatible
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    // the reconciled transaction was not silently given another amount on either computer
+    expect(sa(p.a, p.aid).listTransactions({ ids: [t.id] })[0]).toMatchObject({ amount: -123_45, cleared: 'reconciled' });
+    expect(p.a.sync!.store(p.aid).conflicts().some(c => c.rows.some(r => r.k === t.id))).toBe(true);
+    expect(p.b.sync!.store(p.bid).conflicts().some(c => c.rows.some(r => r.k === t.id))).toBe(true);
+    expect(sa(p.a, p.aid).listTransactions({}).some(x => x.payeeName === 'New')).toBe(true); // the compatible change arrived
+    p.a.sync!.store(p.aid).resolve(p.a.sync!.store(p.aid).conflicts()[0].id, 'mine');
+    await sync([p.a, p.aid], [p.b, p.bid]);
+    expect(sa(p.b, p.bid).listTransactions({ ids: [t.id] })[0]).toMatchObject({ amount: -123_45, cleared: 'reconciled' });
+    expect(fingerprint(p.b, p.bid)).toEqual(fingerprint(p.a, p.aid));
+  });
+  it('G: a "conflicted copy" made by the sync service is neither ignored nor allowed to lose or corrupt data', async () => {
+    const p = await pair();
+    sa(p.b, p.bid).createTransaction({ accountId: p.checking, date: '2026-01-26', amount: -9_00, payeeName: 'Real', categoryId: p.food });
+    await p.b.sync!.syncNow(p.bid);
+    const dir = join(p.folder, 'ops', p.b.sync!.deviceId); const f = readdirSync(dir).find(n => n.endsWith('.json'))!;
+    // the service produced a second, different version of the same file
+    const doc = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    doc.ops[0].changes = doc.ops[0].changes.map((c: any) => (c.t === 'transactions' && c.a ? { ...c, a: { ...c.a, amount: -9_999_00 } } : c));
+    doc.sha256 = (await import('node:crypto')).createHash('sha256').update(JSON.stringify(doc.ops)).digest('hex');
+    const copy = f.replace('.json', ' (MacBook\'s conflicted copy 2026-11-22).json');
+    writeFileSync(join(dir, copy), JSON.stringify(doc));
+    const st = await p.a.sync!.syncNow(p.aid);
+    expect(st.warnings.length).toBeGreaterThan(0);                      // reported …
+    expect(existsSync(join(dir, copy)) && existsSync(join(dir, f))).toBe(true); // … nothing deleted …
+    expect(sa(p.a, p.aid).listTransactions({}).some(t => t.amount === -9_999_00)).toBe(false); // … nothing guessed
+  });
+});

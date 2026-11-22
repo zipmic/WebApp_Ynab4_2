@@ -85,9 +85,9 @@ export class Core {
     const target = join(this.backupDir(id), name);
     if (existsSync(target)) return name;
     svc.db.prepare('VACUUM INTO ?').run(target);
-    // retention: keep the newest N automatic backups; manual and safety backups are kept
-    // retention: the newest N of each automatic kind ('auto' = daily on use, 'scheduled' = scripts/backup-now.ts)
-    const all = this.listBackups(id); const autos = [...all.filter(b => b.reason === 'auto').slice(this.cfg.backupKeep), ...all.filter(b => b.reason === 'scheduled').slice(this.cfg.backupKeep)];
+    // retention: the newest N of each automatic kind ('auto' = daily on use, 'scheduled' = scripts/backup-now.ts,
+    // 'before-sync'/'before-conflict' = desktop sync); manual and other safety backups are kept
+    const all = this.listBackups(id); const autos = ['auto', 'scheduled', 'before-sync', 'before-conflict'].flatMap(k => all.filter(b => b.reason === k).slice(this.cfg.backupKeep));
     for (const b of autos) { try { unlinkSync(join(this.backupDir(id), b.name)); } catch { /* ignore */ } }
     return name;
   }

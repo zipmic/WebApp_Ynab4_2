@@ -3,14 +3,19 @@
 **Read `docs/OPUS_HANDOFF.md` before changing anything.** It lists what is verified, what must not be broken, and the next task.
 
 ## What this is
-A private, self-hosted, browser-based successor to YNAB4 for one household's real finances. It must reproduce
-YNAB4's budgeting behaviour exactly and import the owner's existing YNAB4 budget without loss.
+A private successor to YNAB4 for one household's real finances. It must reproduce YNAB4's budgeting behaviour exactly
+and import the owner's existing YNAB4 budget without loss. Since 2.0 it is primarily a **desktop app** (Windows/macOS,
+Electron) that shares budgets between computers through any sync folder (`docs/DESKTOP_AND_SYNC.md`); the self-hosted
+server version runs from the same code (`npm start`).
 
 ## Stack
 - Shared pure TypeScript domain code: `src/shared` (money, dates, budget engine, YNAB4 readers, bank-text parser, matching)
 - Backend: Node.js ≥ 20.11, Fastify 5, SQLite (better-sqlite3), one database file per budget: `src/server`
 - Frontend: React 19 + TypeScript + Vite + Tailwind 4, TanStack Query/Virtual, hand-written shadcn-style components: `src/web`
-- Tests: Vitest (`tests/unit`), Playwright script (`tests/e2e/run.mjs`), benchmark (`tests/perf/perf.ts`)
+- Desktop: Electron 45 (`src/desktop`: main process serves the Fastify app in memory via `app://`, no port; sandboxed preload),
+  electron-builder (`electron-builder.yml`), sync engine `src/server/sync`
+- Tests: Vitest (`tests/unit`), Playwright script (`tests/e2e/run.mjs`), benchmarks (`tests/perf/perf.ts`, `tests/perf/sync-perf.ts`),
+  packaged-app smoke test (`tests/desktop/smoke.mjs`)
 
 ## Commands
 ```bash
@@ -24,6 +29,10 @@ npm run audit:ynab4 -- <.ynab4 folder | zip | Budget.yfull>   # migration audit,
 npm run backup -- --copy-to <folder>                       # back up every budget now (cron-safe)
 npm run package:windows # ready-to-run zip for Windows (owner has no npm): dist/BudgetReborn-windows-x64-*.zip
 npm start              # production (after build); settings via `node --env-file=<file> dist/server/index.mjs`
+npm run desktop:start  # desktop app from source
+npm run desktop:dist   # desktop installers for the current OS → dist/desktop (Windows/macOS via CI: .github/workflows/desktop.yml)
+xvfb-run -a npm run test:desktop -- dist/desktop/linux-unpacked/budget-reborn   # packaged-app smoke test (after electron-builder --linux dir)
+SYNC_SEEDS=300 npx vitest run tests/unit/sync.test.ts   # many more randomized sync scenarios
 ```
 
 ## Rules that are not negotiable
@@ -33,9 +42,13 @@ npm start              # production (after build); settings via `node --env-file
 3. **Every write goes through `BudgetService.mutate()`** (one SQLite transaction + undo group + revision bump). Never write to a budget database from a route or another module directly.
 4. **Never adjust balances to make numbers match.** Discrepancies are reported, not hidden. Reconciliation adjustments only after explicit user confirmation.
 5. **Imports create a new budget and are all-or-nothing.** Source files are read-only.
-6. **Every `/api` route requires a session** unless listed in `PUBLIC_ROUTES` (`src/server/app.ts`); a test enumerates the route table and fails if a new route is open.
+6. **Every `/api` route requires a session** unless listed in `PUBLIC_ROUTES` (`src/server/app.ts`); a test enumerates the route table and fails if a new route is open. (Desktop mode has no network listener and uses a per-launch session; sign-in routes return 404 there.)
 7. **Privacy:** no telemetry, no external requests (OCR is local). Never commit real financial data, exported budgets, backups or audit reports with details. Test fixtures are synthetic (`tests/fixtures/generate.ts`).
 8. Keep the UI and existing behaviour; do not redesign or refactor broadly without a reason tied to a backlog item.
+9. **Sync (desktop):** a sync conflict is never resolved without the user; remote changes are applied only through
+   `SyncStore.apply`; files in a sync folder are untrusted input and are written only via `src/server/sync/folder.ts`
+   (atomic) — never delete another device's files; the active SQLite database never lives in a sync folder; a restore is
+   always a new local-only budget. New primary-data tables/columns go into `SYNC_TABLES` with a test.
 
 ## Conventions
 - TypeScript strict; ES modules; relative imports with `.ts` extension in server/shared code.
@@ -52,4 +65,6 @@ npm start              # production (after build); settings via `node --env-file
 - `docs/YNAB4_COMPATIBILITY.md` — feature-by-feature comparison with YNAB4
 - `docs/DATA_MIGRATION.md` — YNAB4 file format as observed, mapping, audit
 - `docs/SECURITY_AND_DEPLOYMENT.md` — authentication, hosting, deployment
-- `docs/DEPLOYMENT_GUIDE.md` — the owner's installation: home Windows computer + Tailscale (Danish)
+- `docs/DESKTOP_AND_SYNC.md` — desktop architecture (Electron), sync protocol, conflicts, security, builds, signing
+- `docs/DESKTOP_GUIDE.md` — installing the desktop app, opening a budget, choosing a sync folder (Danish)
+- `docs/DEPLOYMENT_GUIDE.md` — server version: home Windows computer + Tailscale/Caddy (Danish)

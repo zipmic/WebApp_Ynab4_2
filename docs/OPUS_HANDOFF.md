@@ -3,8 +3,11 @@
 Read this whole file first, then `CLAUDE.md`. Everything you need is in the repository; do not rely on earlier conversations.
 
 ## 1. Objective
-Budget Reborn is a private, self-hosted, browser-based replacement for YNAB4 for one household. The owner must be
-able to import their real YNAB4 budget and continue budgeting with identical numbers, on desktop and phone.
+Budget Reborn is a private replacement for YNAB4 for one household. The owner must be able to import their real YNAB4
+budget and continue budgeting with identical numbers. Since 2.0 the main product is a **desktop app for Windows and
+macOS** (Electron) that shares a budget between computers through any sync folder (Dropbox, OneDrive, iCloud Drive, …):
+`docs/DESKTOP_AND_SYNC.md`, user guide `docs/DESKTOP_GUIDE.md`. The self-hosted server version remains in the code base
+(and as of before the conversion in the branch `server-version`).
 
 ## 2. Non-negotiable requirements
 - Financial correctness over everything; integer minor units only; YNAB4 behaviour, not subscription-YNAB behaviour.
@@ -20,7 +23,10 @@ authentication (incl. passkeys with a virtual authenticator), backups, Smart Ban
 98 unit/integration tests, 17 browser steps, benchmark within limits.
 
 ## 4. Architecture decisions (do not re-litigate without new evidence)
-Details and reasons: `docs/ARCHITECTURE.md`. Summary: Node + Fastify + one SQLite file per budget; balances derived,
+Desktop: Electron (reuses the whole Node back end; Tauri would need a Rust rewrite or a local server sidecar), app served
+in memory (no port), per-computer SQLite in app data, sync by immutable operation files with version vectors and per-field
+writer sets; conflicts are never resolved automatically; restore = new local budget. Reasons: `docs/DESKTOP_AND_SYNC.md`.
+Details and reasons for the rest: `docs/ARCHITECTURE.md`. Summary: Node + Fastify + one SQLite file per budget; balances derived,
 never stored; all writes through `BudgetService.mutate()`; trigger-based undo; one revision per budget for conflict
 detection; shared TypeScript domain code; browser-side OCR; imports via a neutral `ImportModel`; one owner account.
 
@@ -38,6 +44,9 @@ detection; shared TypeScript domain code; browser-side OCR; imports via a neutra
 | UI | `src/web/views/*`, `src/web/components/*`, `src/web/lib/*` |
 | Synthetic data | `tests/fixtures/generate.ts` (budget generator, `toYfull`), `tests/fixtures/make-screens.mjs`, `scripts/seed-demo.ts` |
 | Deployment helpers | `deploy/*`, `.env.example` |
+| Desktop app (Electron main/preload, packaging) | `src/desktop/*`, `scripts/build-desktop.mjs`, `electron-builder.yml`, `.github/workflows/desktop.yml`, smoke test `tests/desktop/smoke.mjs` |
+| Sync engine | `src/server/sync/capture.ts` (triggers, tables), `store.ts` (operations, apply, conflicts, resolve, snapshots), `folder.ts` (files, validation), `manager.ts` (cycle, status, publish/join/relink), `describe.ts` (conflict texts); tests `tests/unit/sync.test.ts`, `tests/unit/desktop.test.ts` |
+| Desktop UI additions | `src/web/views/Sync.tsx`, `src/web/lib/desktop.ts` |
 
 ## 6. Critical financial logic
 `docs/BUDGET_ENGINE.md` is the specification, with the evidence for each rule. The two things most easily broken:
@@ -111,6 +120,11 @@ npm run build && npm run test:e2e    # 17 browser steps, ~40 s
 npm run test:perf             # ~30 s, enforces time limits
 npm run audit:ynab4 -- "<path to .ynab4 folder or zip>"   # on real data: keep output/JSON outside the repo
 BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data npm run dev   # demo login: demo / demo-password-123
+SYNC_SEEDS=300 npx vitest run tests/unit/sync.test.ts   # 600+ randomized sync scenarios (default: 10)
+npm run desktop:start         # run the desktop app from source
+npm run desktop:dist          # installers for the current OS → dist/desktop
+xvfb-run -a npm run test:desktop -- dist/desktop/linux-unpacked/budget-reborn   # packaged-app smoke test (Linux)
+npm run test:perf:sync        # sync timings at 55k transactions
 ```
 
 ## 14. Do not break
@@ -121,6 +135,11 @@ BR_DATA_DIR=./demo-data npx tsx scripts/seed-demo.ts && BR_DATA_DIR=./demo-data 
 - Keep every route behind the session check (the route-table test will fail otherwise — do not weaken that test).
 - Do not weaken: review-before-import for uncertain bank rows, duplicate confirmation, confirmation for reconciliation adjustments, new-budget-only imports and restores.
 - Do not add network calls, analytics, CDNs or fonts from other origins (CSP is `default-src 'self'`).
+- Sync: every change to primary data must happen inside `mutate()`/`bulk()` (the commit hook seals the operation in the same
+  transaction). Never apply remote data by any other path than `SyncStore.apply`; never resolve a conflict without the user;
+  never write into a sync folder except through `src/server/sync/folder.ts` (atomic writes); never delete files in a sync
+  folder that another device wrote. A new primary-data table or column must be added to `SYNC_TABLES` (and a test).
+- Bump `SYNC_PROTOCOL` for any incompatible change of the file format; older versions must stop, not guess.
 - Do not commit anything under the ignore rules for financial data; do not paste real names, payees or amounts into tests, docs or commit messages.
 
 **D4. Prebuilt Windows package** — *done*: `npm run package:windows` (`scripts/package-windows.mjs`) builds a zip with the
@@ -129,10 +148,14 @@ script builds a linux-x64 variant (`--platform linux-x64 --dir <folder>`), used 
 The owner has no npm: deliver new versions as this zip.
 
 ## 15. Exact next task
-1. If the owner reports problems with `docs/DEPLOYMENT_GUIDE.md` on their Windows computer: fix those first. Keep the app
-   bound to 127.0.0.1, never forward port 8787, keep `BR_REQUIRE_2FA=1` for the open port, never trust all proxy hops,
-   never suggest `tailscale funnel`, and do not set `BR_TRUST_PROXY` for the Tailscale variant.
-2. Otherwise continue with **U1** (multi-month budget view), then the other U items in order.
+1. **Desktop verification on the owner's machines.** Run the CI workflow (GitHub → Actions → "Desktop app"), give the owner
+   the Windows installer and the macOS dmg, and have them follow `docs/DESKTOP_GUIDE.md`: install, move the budgets from the
+   server data folder, share one budget through their sync folder, open it on the second computer, make an offline change
+   on each and check the status and (if any) the conflict screen. Fix what they report first. Record results in
+   `docs/PROJECT_STATUS.md` (until then Windows/macOS are "implemented but not verified").
+2. If the CI test matrix shows platform-specific failures on Windows/macOS (paths, renames, watchers), fix those next.
+3. Then continue with **U1** (multi-month budget view) and the other U items in order.
 
 Owner's answers recorded: hosting = home Windows computer that is always on, fixed IP, open port, sign-in only for the
-owner (→ required 2FA, I2 done); test-name slip in Git history = leave it.
+owner (→ required 2FA, I2 done); test-name slip in Git history = leave it; then (2026-11) the owner asked for the desktop
+app with folder sync instead of a server — the server version is kept as `server-version` until the desktop app is verified.

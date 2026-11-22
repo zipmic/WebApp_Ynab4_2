@@ -228,6 +228,12 @@ export class SyncStore {
         if (cur[f] === v) { fields.push([f, [...C, me]]); continue; }
         clash.push(f); against.push(...C);
       }
+      for (const grp of spec.linked ?? []) {
+        const here = grp.filter(g => concurrent(eff(g)).length);
+        const there = grp.filter(g => (c.f ? g in c.f : vals[g] !== cur[g]));
+        if (here.length && there.length && new Set([...here, ...there]).size > 1)
+          for (const g of there) if (!clash.includes(g)) { clash.push(g); for (const h of here) against.push(...concurrent(eff(h))); }
+      }
       if (clash.length) { conflicts.push({ t: c.t, k: c.k, fields: clash }); continue; }
       actions.push(() => { updateRow(this.db, c.t, c.k, set); for (const [f, ws] of fields) this.setField(c.t, c.k, f, ws); });
     }

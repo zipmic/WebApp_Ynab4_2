@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Budget Reborn \u2014 a private successor to YNAB4 (desktop app with folder sync, or self-hosted server)",
+  "description": "Budget Reborn — a private successor to YNAB4 (desktop app with folder sync, or self-hosted server)",
   "engines": {
     "node": ">=20.11"
   },
@@ -22,7 +22,8 @@
     "desktop:build": "npm run build && node scripts/build-desktop.mjs",
     "desktop:start": "npm run desktop:build && electron dist/desktop-app",
     "desktop:dist": "npm run desktop:build && electron-builder --publish never",
-    "test:desktop": "node tests/desktop/smoke.mjs"
+    "test:desktop": "node tests/desktop/smoke.mjs",
+    "test:perf:sync": "tsx tests/perf/sync-perf.ts"
   },
   "dependencies": {
     "@fastify/compress": "^9.3.0",

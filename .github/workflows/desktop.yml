@@ -1,0 +1,97 @@
+# Tests and builds the desktop app on real Windows, macOS and Linux machines.
+# Artifacts (Windows installer + portable zip, macOS .dmg for Apple Silicon and Intel) are attached to each run.
+# No signing secrets are used: see docs/DESKTOP_AND_SYNC.md → "Code signing" for what that means on first start.
+name: Desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # the sync engine on each platform's own file system (paths, renames, watchers)
+      - name: Sync simulations with more random scenarios
+        run: npx vitest run tests/unit/sync.test.ts
+        env:
+          SYNC_SEEDS: '60'
+
+  e2e:
+    name: Browser end-to-end + packaged desktop smoke test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:e2e
+      - run: npm run test:perf
+      - name: Package for Linux (folder) and run the two-computer smoke test
+        run: |
+          node scripts/build-desktop.mjs
+          npx electron-builder --linux dir --publish never
+          xvfb-run -a node tests/desktop/smoke.mjs dist/desktop/linux-unpacked/budget-reborn
+
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run desktop:build
+      - run: npx electron-builder --win nsis zip --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BudgetReborn-windows
+          path: |
+            dist/desktop/*.exe
+            dist/desktop/*.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS disk images
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run desktop:build
+      - run: npx electron-builder --mac dmg --arm64 --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BudgetReborn-macos
+          path: dist/desktop/*.dmg
+          if-no-files-found: error

@@ -1,8 +1,10 @@
 # Budget Reborn
 
-A private, self-hosted budgeting app that works the way **YNAB4** did — zero-based envelope budgeting, the same
-rollover and overspending rules, the same "Available to Budget" — in your browser on computer, tablet and phone.
-It can import your existing YNAB4 budget with its full history, and it never sends your data anywhere.
+A private budgeting app that works the way **YNAB4** did — zero-based envelope budgeting, the same rollover and
+overspending rules, the same "Available to Budget". A **desktop app for Windows and macOS** that keeps your budget on
+your own computer and, if you like, shares it with your other computers through any sync folder (Dropbox, OneDrive,
+Google Drive, iCloud Drive, Syncthing, a network drive) — no server, no account, no login. It can import your existing
+YNAB4 budget with its full history, and it never sends your data anywhere. (A self-hosted browser version is included too.)
 
 > Budget Reborn is an independent project. It is not made by, affiliated with or endorsed by YNAB.
 
@@ -20,7 +22,19 @@ It can import your existing YNAB4 budget with its full history, and it never sen
 - **Backups** every day the budget is used and before every import, one-click download, restore, CSV/JSON export.
 - **Security**: one private login (Argon2id), optional two-factor codes and passkeys, HTTPS, no registration, no tracking.
 
-## Try it on your computer
+## Desktop app (recommended)
+Download the installer for Windows or macOS from the latest run of the **Desktop app** workflow (GitHub → Actions →
+Artifacts) and follow [docs/DESKTOP_GUIDE.md](docs/DESKTOP_GUIDE.md) (Danish): install, open or import your budget,
+choose a sync folder, open it on your other computer. How sync works and what it guarantees:
+[docs/DESKTOP_AND_SYNC.md](docs/DESKTOP_AND_SYNC.md).
+
+- Works offline; changes made on two computers are combined automatically.
+- When the same thing was changed differently on two computers, you decide — nothing is overwritten silently.
+- Built-in daily backups; a restore never rolls back your other computers.
+
+Build it yourself: `npm install`, then `npm run desktop:start` (run) or `npm run desktop:dist` (installer for this OS).
+
+## Try the browser version on your computer
 Requires [Node.js](https://nodejs.org) 20.11 or newer.
 ```bash
 npm install
@@ -48,8 +62,8 @@ BR_DATA_DIR=./demo-data npm run dev
 For an extra check against YNAB4's own month figures, export the budget from YNAB4 (File → Export) and run
 `npm run audit:ynab4 -- "<your .ynab4 folder or zip>" --budget-csv "<…-Budget.csv>"`. It prints counts only.
 
-## Running it for real
-Budget Reborn needs a machine that can keep a **Node.js** process running. Ordinary PHP-only web space cannot run it.
+## Running the browser version for real
+The browser (server) version needs a machine that can keep a **Node.js** process running. Ordinary PHP-only web space cannot run it.
 - **Home computer + Tailscale (recommended, Windows):** step-by-step guide in Danish:
   [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md). Scripts in `deploy/windows/` install it as an automatic
   service with nightly backups; Tailscale gives your phone private HTTPS access without exposing anything to the internet.
@@ -59,7 +73,8 @@ Budget Reborn needs a machine that can keep a **Node.js** process running. Ordin
   [docs/SECURITY_AND_DEPLOYMENT.md](docs/SECURITY_AND_DEPLOYMENT.md).
 
 ## Your data
-- Everything stays on your server: one SQLite file per budget in the data folder. Keep that folder out of any web folder.
+- Everything stays on your own computer (desktop) or server: one SQLite file per budget in the data folder. In the desktop
+  app a sync folder only receives changes and copies, never the working database.
 - No telemetry, analytics or external requests. Screenshot text recognition runs in your browser.
 - An optional external AI reader for difficult screenshots exists but is off unless the server owner configures it,
   and it asks for your consent each time.

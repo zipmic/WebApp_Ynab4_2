@@ -499,7 +499,9 @@ export async function buildApp(cfg: Config, core = new Core(cfg)): Promise<App> 
     });
     app.post(`${P}/sync/conflicts/:cid`, async req => {
       const svc = svcOf(req); const cid = z.coerce.number().int().positive().parse((req.params as any).cid);
-      const r = sync.store(svc.id).resolve(cid, z.object({ choice: z.enum(['mine', 'theirs']) }).parse(req.body).choice);
+      const choice = z.object({ choice: z.enum(['mine', 'theirs']) }).parse(req.body).choice;
+      core.backup(svc.id, 'before-conflict'); // the state before the decision stays available as a local backup
+      const r = sync.store(svc.id).resolve(cid, choice);
       sync.engine(svc.id)?.kick(200);
       return r;
     });

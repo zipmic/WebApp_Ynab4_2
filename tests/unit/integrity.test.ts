@@ -339,14 +339,14 @@ describe('scheduled backups (D2)', () => {
     const upload = join(dir, 'tmp', 'upload-in-progress.sqlite'); writeFileSync(upload, 'partial');
     const opened = JSON.stringify(app.core.listBudgets());
     const offsite = mkdtempSync(join(tmpdir(), 'br-offsite-'));
-    const run = spawnSync('npx', ['tsx', 'scripts/backup-now.ts', '--copy-to', offsite], { env: { ...process.env, BR_DATA_DIR: dir }, encoding: 'utf8' });
+    const run = spawnSync(process.execPath, [join('node_modules', 'tsx', 'dist', 'cli.mjs'), 'scripts/backup-now.ts', '--copy-to', offsite], { env: { ...process.env, BR_DATA_DIR: dir }, encoding: 'utf8' });
     expect(run.status).toBe(0); expect(run.stdout).toMatch(/2 of 2 budget\(s\) backed up/);
     expect(existsSync(upload)).toBe(true); expect(JSON.stringify(app.core.listBudgets())).toBe(opened); // tmp untouched, "last opened" unchanged
     for (const id of ids) expect(app.core.listBackups(id).filter(b => b.reason === 'scheduled')).toHaveLength(1);
     const copies = readdirSync(offsite); expect(copies).toHaveLength(2); expect(copies.every(f => f.endsWith('.budgetreborn'))).toBe(true);
     const restored = app.core.restore(readFileSync(join(offsite, copies.find(f => f.startsWith('Second'))!)));
     expect(dump(app.core.service(restored.id))).toBe(dump(app.core.service(ids[1])));
-    expect(spawnSync('npx', ['tsx', 'scripts/backup-now.ts', '--copy-to'], { env: { ...process.env, BR_DATA_DIR: dir } }).status).toBe(2);
+    expect(spawnSync(process.execPath, [join('node_modules', 'tsx', 'dist', 'cli.mjs'), 'scripts/backup-now.ts', '--copy-to'], { env: { ...process.env, BR_DATA_DIR: dir } }).status).toBe(2);
     await app.close();
   });
   it('keeps the newest N scheduled and N daily backups; manual and safety backups are never pruned', async () => {

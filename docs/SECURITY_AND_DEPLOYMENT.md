@@ -1,5 +1,10 @@
 # Security and deployment
 
+> **Desktop app (2.0):** the desktop app has no network listener and no login; its security model (in-memory `app://`
+> protocol, sandboxed window, folder tokens, untrusted sync files) is described in [DESKTOP_AND_SYNC.md](DESKTOP_AND_SYNC.md#5-security-model-desktop).
+> This document covers the self-hosted server version.
+
+
 ## Server requirements
 - **Node.js ≥ 20.11** with the ability to keep one process running, and a writable private data directory.
 - Native modules: `better-sqlite3` and `@node-rs/argon2` (prebuilt binaries for Linux/macOS/Windows x64 and arm64 are installed by npm).

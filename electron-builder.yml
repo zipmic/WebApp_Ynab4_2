@@ -40,8 +40,9 @@ mac:
     - target: dmg
       arch: [arm64, x64]
   category: public.app-category.finance
-  # signing and notarisation need an Apple Developer ID (see docs); without it Gatekeeper asks the user to confirm
-  identity: null
+  # "-" = ad-hoc signature (required for Apple Silicon, needs no certificate). A Developer ID signature and
+  # notarisation need a paid Apple Developer membership (see docs); without them Gatekeeper asks the user to confirm.
+  identity: "-"
   hardenedRuntime: true
 dmg:
   title: Budget Reborn ${version}

@@ -70,6 +70,15 @@ try {
   await A.page.getByTestId('sync-indicator').waitFor();
   await A.page.screenshot({ path: `${shots}/02-sync-settings.png` });
 
+  // downloads (backups, exports) work from the app:// window: the file is saved where the user chooses
+  const dl = tmp('br-dl-');
+  await A.app.evaluate(({ session }, dir) => { session.defaultSession.on('will-download', (_e, item) => item.setSavePath(dir + '/' + item.getFilename())); }, dl);
+  await A.page.getByRole('tab', { name: 'Backups & export' }).click();
+  await A.page.getByRole('button', { name: 'Back up now and download' }).click();
+  for (let i = 0; i < 40 && !readdirSync(dl).some(n => n.endsWith('.budgetreborn')); i++) await A.page.waitForTimeout(250);
+  const file = readdirSync(dl).find(n => n.endsWith('.budgetreborn'));
+  check(!!file && readFileSync(join(dl, file)).subarray(0, 15).toString() === 'SQLite format 3', `a backup can be downloaded from the desktop window (${file ?? 'nothing saved'})`);
+
   const B = await launch('B');
   try {
     await B.page.getByText('Welcome to Budget Reborn').waitFor({ timeout: 30000 });

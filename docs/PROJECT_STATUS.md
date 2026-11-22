@@ -1,6 +1,6 @@
 # Project status
 
-Last updated after backlog items M1, M2, M3, M4, I1, I2, I3, D1, D2 and D3. Test counts: 126 unit/integration tests, 19 browser steps, benchmark with limits — all passing.
+Last updated after the desktop conversion (Budget Reborn 2.0: Electron app with file-based sync, see DESKTOP_AND_SYNC.md). Test counts: 169 unit/integration tests (incl. 2- and 3-computer sync simulations; 600+ randomized sync scenarios run with `SYNC_SEEDS=300`), 19 browser steps, packaged desktop smoke test, benchmarks with limits — all passing in the Linux build environment.
 
 ## Completed and verified
 | Area | Verified by |
@@ -30,6 +30,15 @@ Last updated after backlog items M1, M2, M3, M4, I1, I2, I3, D1, D2 and D3. Test
 | UI: budget, register, reports, schedules, settings, wizards, phone layout, dark mode | browser test + screenshots |
 | Performance at 51k transactions / 10 years | `npm run test:perf` (cold budget ≈55 ms, all-accounts register ≈150 ms) |
 
+### Desktop app and sync (2.0)
+| Area | Verified by |
+|---|---|
+| Desktop app: existing API and UI served in memory through `app://` (no TCP port), no login, per-launch CSRF, folders only by token, window state | `tests/unit/desktop.test.ts`; packaged Linux app smoke test (`tests/desktop/smoke.mjs`): starts, creates a budget, shares it, a second installation opens it, a change propagates, **no listening socket in the app or its helper processes** |
+| Sync engine: capture in the same transaction as every write, causal order, exactly-once, field-level merge, conflicts for the user (A–G), resolutions that close conflicts everywhere, snapshots for new computers | `tests/unit/sync.test.ts`: situations A–G one by one; out-of-order, half-written, duplicated, damaged files; conflicted copies; unavailable folder + restart; atomicity; identity clash; newer protocol/schema; restore isolation; moving folders; randomized 2–3-computer sessions through a shared folder and through an unreliable simulated cloud (identical primary data and budget figures, integrity check clean) |
+| Budget schema v3 (sync tables, payee name index non-unique) and system schema v3 upgrades with safety copies | upgrade tests in `tests/unit/integrity.test.ts` |
+| Moving budgets from the server version (source folder only read; verified copies) | unit test hashing every source file before/after; figures identical |
+| Sync cost at 55,000 transactions | `npm run test:perf:sync`: share ≈4.5 s (snapshot 1.7 MB), join ≈5.6 s, one change written ≈10 ms, applied elsewhere ≈0.5 s |
+
 ## Implemented but not verified
 | Item | What is missing |
 |---|---|
@@ -43,6 +52,10 @@ Last updated after backlog items M1, M2, M3, M4, I1, I2, I3, D1, D2 and D3. Test
 | Deployment behind a real reverse proxy (VPS) | configuration examples only; never deployed |
 | Service worker / installable PWA | registered in production builds; not tested on phones |
 | Report figures | not compared with YNAB4's reports |
+| Desktop app on **Windows** (portable zip built here; NSIS installer built only by CI) | **not started on Windows**: the build environment is Linux; Wine crashes in its sandbox, so the installer could not be produced or tried here |
+| Desktop app on **macOS** (dmg arm64 + x64, ad-hoc signed) | built only by CI on a Mac; **not started on a Mac** |
+| Sync through real Dropbox/OneDrive/iCloud/Google Drive/Syncthing clients | simulated (delays, partial files, conflicted copies, out-of-order delivery); **not tried with the real services** |
+| Unit tests on Windows/macOS file systems | configured in `.github/workflows/desktop.yml`; not yet run |
 
 ## Known bugs and rough edges
 1. Hidden categories are appended to the end of their group after import (original position inside the group is not stored by YNAB4 for hidden ones).
@@ -54,11 +67,12 @@ Last updated after backlog items M1, M2, M3, M4, I1, I2, I3, D1, D2 and D3. Test
 
 ## Missing features (not started)
 Multi-month budget view · drag-and-drop reordering · configurable keyboard shortcuts · PIN lock · database encryption ·
-offline writes · payee rename rules · entering scheduled transactions ahead of time ·
+encryption of the sync folder · pruning of old sync operations · automatic program updates · payee rename rules · entering scheduled transactions ahead of time ·
 payee management screen (merge/delete) · deployment guide beyond the examples.
 
 ## Architectural risks
-1. **Deployment untried on the target machine.** The owner chose a home Windows computer with a fixed IP and an open port (Caddy, required 2FA); the scripts are written and partly tested but not yet run there.
+0. **Desktop builds untried on the target machines.** Windows and macOS packages come from CI; the first real start on the owner's computers is still to be done (see OPUS_HANDOFF.md → next task).
+1. **Server deployment untried on the target machine** (now secondary to the desktop app). The owner chose a home Windows computer with a fixed IP and an open port (Caddy, required 2FA); the scripts are written and partly tested but not yet run there.
 2. Single process, single SQLite writer: fine for one household; do not run two server instances on one data directory.
 3. Coarse concurrency control: any change elsewhere rejects the next write from a stale device (by design).
 4. The engine's reference twin in `migrationAudit.ts` must be kept in step deliberately.

@@ -1,6 +1,10 @@
 # Architecture
 
 ## Overview
+Two ways to run the same code: the **desktop app** (`src/desktop`, Electron; the Fastify app served in memory through
+`app://`, no network port, no login, budgets shared between computers through a sync folder — `src/server/sync`,
+documented in [DESKTOP_AND_SYNC.md](DESKTOP_AND_SYNC.md)) and the **self-hosted server** (`npm start`, described below).
+
 ```
 Browser (React SPA, src/web)  ──HTTPS, cookie session──▶  Fastify server (src/server)  ──▶  SQLite files (data dir)
         │  local OCR (WASM, /ocr/*)                              │
@@ -54,7 +58,7 @@ A single Node process serves the built frontend (`dist/web`) and the JSON API. T
 <BR_DATA_DIR>/setup-token.txt          exists only until the owner account is created
 ```
 
-## Budget database schema (version 2, `BUDGET_MIGRATIONS` in `db.ts`)
+## Budget database schema (version 3, `BUDGET_MIGRATIONS` in `db.ts`; v3 = sync tables, see DESKTOP_AND_SYNC.md)
 - `accounts(id, name, type, on_budget, closed, sort_order, note, source_id)`
 - `category_groups(id, name, sort_order, hidden, note, system)`; `categories(id, group_id, name, sort_order, hidden, note, kind)`
   — the two income categories are fixed rows `income:this` / `income:next` in system group `group:income`.

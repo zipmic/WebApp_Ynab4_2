@@ -332,6 +332,8 @@ export class BudgetSync {
     if (inconsistent.size) warnings.push({ code: 'INCONSISTENT', message: 'Another computer wrote two different versions of the same change. Its changes are not applied until this is cleared up (for example two installations sharing one identity).' });
     // ---- apply in causal order: an operation only after everything it depends on, each exactly once
     let applied = 0;
+    // a larger batch of changes from other computers: keep a local backup of the state before it (as before imports)
+    if ([...this.pending.values()].filter(p => !store.seen(p.op)).length >= 20) { try { this.mgr.core.backup(this.svc.id, 'before-sync'); } catch { /* never blocks sync */ } }
     for (let progress = true; progress;) {
       progress = false;
       const cur = store.vv();

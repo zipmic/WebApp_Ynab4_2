@@ -30,11 +30,12 @@ export interface Op {
   /** set on operations that resolve conflicts */ resolves?: string[];
 }
 
-interface TableSpec { key: string[]; exclude: string[]; lww: string[] }
+interface TableSpec { key: string[]; exclude: string[]; lww: string[]; linked?: string[][] }
 /**
  * Tables with primary data. `exclude`: device-local columns (never synchronised). `lww`: bookkeeping columns where
  * two devices changing them at the same time is not worth asking the user about (sort order, "last category used",
  * a usage counter, a creation timestamp); a deterministic rule picks the same winner on every device.
+ * `linked`: fields that only make sense together; independent changes to different fields of one group conflict.
  */
 export const SYNC_TABLES: Record<string, TableSpec> = {
   meta: { key: ['key'], exclude: [], lww: [] },
@@ -42,7 +43,9 @@ export const SYNC_TABLES: Record<string, TableSpec> = {
   category_groups: { key: ['id'], exclude: [], lww: ['sort_order'] },
   categories: { key: ['id'], exclude: [], lww: ['sort_order'] },
   payees: { key: ['id'], exclude: [], lww: ['auto_category_id'] },
-  transactions: { key: ['id'], exclude: ['seq'], lww: ['created_at'] },
+  // amount, cleared/reconciled state and account together make up a reconciled balance: changing one of them on
+  // one computer while another computer changes a different one of them is a conflict, not a merge
+  transactions: { key: ['id'], exclude: ['seq'], lww: ['created_at'], linked: [['amount', 'cleared', 'account_id']] },
   monthly_budgets: { key: ['month', 'category_id'], exclude: [], lww: [] },
   month_notes: { key: ['month'], exclude: [], lww: [] },
   scheduled: { key: ['id'], exclude: [], lww: [] },
